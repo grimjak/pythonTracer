@@ -1,0 +1,6 @@
+numpy
+matplotlib
+Flask
+Flask-SocketIO
+scikit-image
+ghalton
