@@ -183,11 +183,13 @@ def sample(ps,ray):
 
         #calculate direct lighting
         rayToLight = Ray(M,(L-M))
+        rayToLight.d = normalize(rayToLight.d)
         traced = trace(ray)
         if traced:
-            Cs, rayToLight = shade(ps,M,N,rayToLight,col_ray,smp) #don't want to affect overall pixel sample throughput with direct lighting
-            ps.rgb += (ps.t * Cs * color_light) / rayToLight.pdf
+            #Cs, rayToLight = shade(ps,M,N,rayToLight,col_ray,smp) #don't want to affect overall pixel sample throughput with direct lighting
+            ps.rgb += ps.t * ((col_ray * color_light) * (np.dot(N,rayToLight.d) * M_INVPI))
 
+        #indirect lighting
         Cs,ray = shade(ps,M,N,ray,col_ray,smp)
         ps.t *= Cs / ray.pdf
         # Reflection: create a new ray.
@@ -201,7 +203,7 @@ def render_scene():
     #bin rays based on direction (and origin?)
     #go through rays in ordered batches producing a list of hit points
     #shade hit points, secondary rays are fed back into ray bins
-    samples = 1
+    samples = 4
 
     smp = Sampler(w*h*samples)
     col = np.zeros(3)  # Current color.
@@ -262,12 +264,12 @@ scene = [add_sphere([.75, .1, 1.], .6, [0.1, 0.1, 0.9]),
          add_plane([0., -.5, 0.], [0.0, 1.0, 0.0]),
     ]
 
-depth_max = 1  # Maximum number of light reflections.
+depth_max = 2  # Maximum number of light reflections.
 
 O = np.array([0., 0.35, -1.])  # Camera.
 
 # Light position and color.
-L = np.array([5., 5., -10.])
+L = np.array([5., 5., 10.])
 color_light = np.ones(3)
 
 # Default light and material parameters.
