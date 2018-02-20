@@ -5,7 +5,7 @@ from skimage.io import imsave
 from threading import Thread
 import queue
 
-from math import sqrt, cos, sin
+from math import sqrt, cos, sin, floor
 import random
 #from PIL import Image
 
@@ -29,11 +29,15 @@ M_INVPI = 1/ M_PI
 rayqueue = queue.Queue()
 shadequeue = queue.Queue()
 
+stopped = False
+quit = False
+
 class Ray():
     def __init__(self, O, D, PDF=1):
         self.o = O
         self.d = D
         self.pdf = 1.0
+        self.depth = 0
         return
 
 class Sampler():
@@ -47,7 +51,8 @@ class Sampler():
         return self.points[self.index%self.size]
 
 class PixelSample():
-    def __init__(self):
+    def __init__(self,x,y):
+        self.xy = np.array([x,y])
         self.rgb = np.array([0.0,0.0,0.0])
         self.t = 1.0 #througput
         self.d = 0 #current depth, do we need to track this?
@@ -133,6 +138,15 @@ def trace(ray):
     #color = np.array([0.18,0.18,0.18])  
     return obj,M,N,color
 
+#version of trace_ray which just returns geometric properties
+def transmission(ray):
+    t = np.inf
+    for i, obj in enumerate(scene):
+        t_obj = intersect(ray,obj)
+        if t_obj < np.inf:
+            return False
+    return True
+
 def add_sphere(position, radius, color):
     return dict(type='sphere', position=np.array(position), 
         radius=np.array(radius), color=np.array(color), reflection=.5)
@@ -148,6 +162,7 @@ def add_plane(position, normal):
 def environment(dir):
     return np.array([1.0,1.0,1.0])
 
+
 #for a given hit point what's the current sample weight 
 #add new rays to the ray queue
 def shade(ps,P,N,ray,Ci,smp):
@@ -162,11 +177,25 @@ def shade(ps,P,N,ray,Ci,smp):
     d = normalize(sample_d[0]*u+sample_d[1]*v+sample_d[2] * w)
     pdf = np.dot(N,sample_d) * M_INVPI
 
-    #update pixel sample throughput based on surface colour and pdf
-    #pdf should be applied to the result of the hit not the first hit
-    #should pdf be on the ray?
-    #ps.t *= Cs / ray.pdf
+    #update the radiance of the pixel sample directly with any emmision
+    #then shoot another ray
+    ps.t *= Ci / ray.pdf
     return Ci,Ray(P+N*0.0001,d,pdf)
+
+def shade_specular(ps,P,N,ray,Ci,smp):
+    #specular
+    d = normalize(ray.d - 2 * np.dot(ray.d, N) * N)
+    pdf = 1
+    return Ci,Ray(P+N*0.0001,d,pdf)
+
+def occlusion(ps,P,N,ray,Ci,smp):
+    #calculate direct lighting
+    if transmission(ray):
+        rgb = ps.t * ((Ci * color_light) * (np.dot(N,ray.d) * M_INVPI))
+        i = ps.xy[0]
+        j = ps.xy[1]
+        img[h-j-1,i] += rgb
+             
 
 def sample(ps,ray):
     depth = 0
@@ -182,19 +211,12 @@ def sample(ps,ray):
         depth += 1
 
         #calculate direct lighting
-        rayToLight = Ray(M,(L-M))
+        rayToLight = Ray(M+N*0.0001,(L-M))
         rayToLight.d = normalize(rayToLight.d)
-        traced = trace(ray)
-        if traced:
-            #Cs, rayToLight = shade(ps,M,N,rayToLight,col_ray,smp) #don't want to affect overall pixel sample throughput with direct lighting
-            ps.rgb += ps.t * ((col_ray * color_light) * (np.dot(N,rayToLight.d) * M_INVPI))
+        occlusion(ps,M,N,rayToLight,col_ray,smp)
 
-        #indirect lighting
+        #indirect
         Cs,ray = shade(ps,M,N,ray,col_ray,smp)
-        ps.t *= Cs / ray.pdf
-        # Reflection: create a new ray.
-       # ray.o, ray.d = M + N * .0001, normalize(ray.d - 2 * np.dot(ray.d, N) * N)
-       # pdf = np.dot(N,ray.d)
 
     return ps
 
@@ -203,32 +225,40 @@ def render_scene():
     #bin rays based on direction (and origin?)
     #go through rays in ordered batches producing a list of hit points
     #shade hit points, secondary rays are fed back into ray bins
-    samples = 4
+    #samples = 4
 
-    smp = Sampler(w*h*samples)
+    #smp = Sampler(w*h*samples)
     col = np.zeros(3)  # Current color.
     Q = np.array([0., 0., 0.])  # Camera pointing to.
 
     # Loop through all pixels.
-    for i, x in enumerate(np.linspace(S[0], S[2], w)):
-        if i % 10 == 0:
-            print (i / float(w) * 100, "%")
-        for j, y in enumerate(np.linspace(S[1], S[3], h)):
-            col[:] = 0
-            for s in range(samples): 
-                offset = smp.sample2d()
-                Q[:2] = (x+(offset[0]-0.5)/w, y+(offset[1]-0.5)/h)
-                #Q[:2] = (x, y)
+    for s in range(samples):   
+        for i, x in enumerate(np.linspace(S[0], S[2], w)):
+            if i % 10 == 0:
+                print (i / float(w) * 100, "%")
+            for j, y in enumerate(np.linspace(S[1], S[3], h)):
+            #for s in range(samples): 
+                offsetu = filterwidth * smp.sample2d()[0]
+                offsetv = filterwidth * smp.sample2d()[1]
+                Q[:2] = (x+(offsetu-(filterwidth/2.0))/w, y+(offsetv-(filterwidth/2.0))/h)
 
                 D = normalize(Q - O)
-                #depth = 0
                 ray = Ray(O, D)
-                #reflection = 1.
-                #col = sample(O,D)
-                ps = PixelSample()
+
+                ps = PixelSample(i,j)
+                weights[h-j-1,i] += 1 
                 ps = sample(ps,ray)
-                #col = np.array([1,0,0])
-                img[h - j - 1, i, :] += np.clip(ps.rgb, 0, 1) / samples
+
+                if stopped:
+                    break
+
+                if quit:
+                    exit()
+                #img[h - j - 1, i, :] += np.clip(ps.rgb, 0, 1) / samples
+                #update_pixel(ps)
+                #img[h-j-1,i] = (img[h-j-1,i] / weights[h-j-1,i]) + (np.clip(ps.rgb,0,1) / weights[h-j-1,i])
+
+
 
 @app.route('/fullrender')  
 def fullRender():  
@@ -240,20 +270,33 @@ def fullRender():
 
 @app.route('/render')  
 def startRender():
-    t = Thread(target = render_scene)
-    t.start()   
+    #t = Thread(target = render_scene)
+    if not t.is_alive():
+        print("starting render")
+        t.start()
+    else:
+        stopped = True
+        t.join()
+        t.start()
     #render_scene()
     outstring = io.BytesIO()
-    imsave(outstring, img, plugin='pil', format_str='png')
+    #img = np.clip(img,0,1)
+    imsave(outstring, img.clip(0,1), plugin='pil', format_str='png')
     outstring.seek(0)
     return send_file(outstring, attachment_filename='test.png',mimetype='image/png')
 
 @app.route('/update')
 def update():
     outstring = io.BytesIO()
-    imsave(outstring, img, plugin='pil', format_str='png')
+    #img = np.clip(img,0,1)
+    imsave(outstring, (img/weights).clip(0,1), plugin='pil', format_str='png')
     outstring.seek(0)
     return send_file(outstring, attachment_filename='test.png',mimetype='image/png')
+
+@app.route('/exit')
+def exit():
+    quit = True
+    return('quitting')
 
 # List of objects.
 color_plane0 = 1. * np.ones(3)
@@ -264,12 +307,17 @@ scene = [add_sphere([.75, .1, 1.], .6, [0.1, 0.1, 0.9]),
          add_plane([0., -.5, 0.], [0.0, 1.0, 0.0]),
     ]
 
-depth_max = 2  # Maximum number of light reflections.
+depth_max = 5  # Maximum number of light reflections.
+samples = 16
+filterwidth = 2.0
+smp = Sampler(w*h*samples)
+t = Thread(target = render_scene)
+
 
 O = np.array([0., 0.35, -1.])  # Camera.
 
 # Light position and color.
-L = np.array([5., 5., 10.])
+L = np.array([5., 5., -10.])
 color_light = np.ones(3)
 
 # Default light and material parameters.
@@ -279,6 +327,7 @@ specular_c = 1.
 specular_k = 50
 
 img = np.zeros((h, w, 3))
+weights = np.zeros((h,w,1))
 
 #smp = Sampler()
 r = float(w) / h
