@@ -119,7 +119,7 @@ def get_color(obj, M):
     return color
 
 #version of trace_ray which just returns geometric properties
-def trace(ray):
+def trace_ray(ray):
     t = np.inf
     for i, obj in enumerate(scene):
         t_obj = intersect(ray,obj)
@@ -165,7 +165,7 @@ def environment(dir):
 
 #for a given hit point what's the current sample weight 
 #add new rays to the ray queue
-def shade(ps,P,N,ray,Ci,smp):
+def shade_diffuse(ps,P,N,ray,Ci,smp):
     # Diffuse 
     w = N 
     u = np.array([0.00319,1.0,0.0078])
@@ -197,12 +197,36 @@ def occlusion(ps,P,N,ray,Ci,smp):
         img[h-j-1,i] += rgb
              
 
-def sample(ps,ray):
+#trace a ray and add the hit point to the shade queue
+def trace(ps,ray,smp):
+    traced = trace_ray(ray)
+    if not traced:
+        return
+
+   # if ray.depth > depth_max:
+        #camera ray
+
+    obj, M, N, col_ray = traced
+    shade(ps,M,N,ray,col_ray,smp)
+
+def shade(ps,M,N,ray,col_ray,smp):
+    #calculate direct lighting
+    rayToLight = Ray(M+N*0.0001,(L-M))
+    rayToLight.d = normalize(rayToLight.d)
+    occlusion(ps,M,N,rayToLight,col_ray,smp)  
+
+    #generate the next ray
+    Cs,newray = shade_diffuse(ps,M,N,ray,col_ray,smp)
+    newray.depth = ray.depth+1
+    #add to the ray queue
+    trace(ps,newray,smp)
+
+def sample_old(ps,ray):
     depth = 0
     smp = Sampler(256)
     # Loop through initial and secondary rays.
     while depth < depth_max:
-        traced = trace(ray)
+        traced = trace_ray(ray)
         if not traced:
             #miss, add environment
            # ps.rgb += ps.t * environment(ray.d)
@@ -216,10 +240,17 @@ def sample(ps,ray):
         occlusion(ps,M,N,rayToLight,col_ray,smp)
 
         #indirect
-        Cs,ray = shade(ps,M,N,ray,col_ray,smp)
+        Cs,ray = shade_diffuse(ps,M,N,ray,col_ray,smp)
 
     return ps
 
+def sample(ps,ray):
+    smp = Sampler(256)
+    traced = trace_ray(ray)
+    if not traced:
+        return
+    obj,M,N, col_ray = traced
+    shade(ps,M,N,ray,col_ray,smp)
 
 def render_scene():
     #bin rays based on direction (and origin?)
@@ -247,7 +278,7 @@ def render_scene():
 
                 ps = PixelSample(i,j)
                 weights[h-j-1,i] += 1 
-                ps = sample(ps,ray)
+                sample(ps,ray)
 
                 if stopped:
                     break
