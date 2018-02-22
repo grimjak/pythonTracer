@@ -1,4 +1,5 @@
 import numpy as np
+import sys
 import matplotlib.pyplot as plt
 import io
 from skimage.io import imsave
@@ -7,38 +8,66 @@ import queue
 
 from math import sqrt, cos, sin, floor
 import random
+import time
+import json
 #from PIL import Image
 
 from flask import Flask
 from flask import send_file
-from flask.ext.socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit
+
+import pika
 
 import ghalton
 
 app = Flask(__name__)
-@app.route('/')
 
+@app.route('/')
 def hello_world():
     return 'test2 app'
+
+while True:
+    try:
+        connection = pika.BlockingConnection(pika.ConnectionParameters('rabbitmq'))
+        if connection.is_open:
+            print('OK')
+            break
+    except:
+        print("no connection")
+        time.sleep(1)
+
+channel = connection.channel()
+channel.queue_declare(queue='camerarayqueue')
+channel.queue_declare(queue='rayqueue')
+channel.queue_declare(queue ='shadequeue')
+channel.queue_declare(queue ='occlusionqueue')
+
 
 w = 640
 h = 480
 M_PI = 3.14159265358979323846
 M_INVPI = 1/ M_PI
 
-rayqueue = queue.Queue()
-shadequeue = queue.Queue()
+#camerarayqueue = queue.Queue()
 
 stopped = False
 quit = False
 
 class Ray():
-    def __init__(self, O, D, PDF=1):
+    def __init__(self, O=np.zeros(3), D=np.zeros(3), PDF=1, depth=0):
         self.o = O
         self.d = D
         self.pdf = 1.0
         self.depth = 0
         return
+    def to_dict(self):
+        return {'o':self.o.tolist(),'d':self.d.tolist(),'pdf':self.pdf,'depth':self.depth}
+    def from_dict(self,dict):
+        self.o = np.array(dict['o'])
+        self.d = np.array(dict['d'])
+        self.pdf = np.array(dict['pdf'])
+        self.depth = np.array(dict['depth'])
+
 
 class Sampler():
     def __init__(self,size):
@@ -51,11 +80,38 @@ class Sampler():
         return self.points[self.index%self.size]
 
 class PixelSample():
-    def __init__(self,x,y):
-        self.xy = np.array([x,y])
-        self.rgb = np.array([0.0,0.0,0.0])
-        self.t = 1.0 #througput
-        self.d = 0 #current depth, do we need to track this?
+    def __init__(self,x=0,y=0,t=1.0):
+        self.i = x
+        self.j = y
+        self.t = t #througput
+    def to_dict(self):
+        return self.__dict__
+    def from_dict(self,dict):
+        self.i = dict['i']
+        self.j = dict['j']
+        self.t = dict['t']
+
+class QueueWrapper():
+    def __init__(self,key):
+        self.key = key
+        channel.queue_declare(queue=key)
+
+    def put(self,data):
+        datalist = []
+        for d in data:
+            if type(d) is 'numpy.ndarray':
+                datalist.append(d.tolist())
+            else:
+                datalist.append(d.to_dict())
+
+        channel.basic_publish(exchange='',routing_key=self.key,body=json.dumps(datalist))
+    def get(self,data): #rebuild output tuple
+        outdata = ()
+        for d in data:
+            outdata+d
+        return outdata
+
+
 
 def normalize(x):
     x /= np.linalg.norm(x)
@@ -162,7 +218,6 @@ def add_plane(position, normal):
 def environment(dir):
     return np.array([1.0,1.0,1.0])
 
-
 #for a given hit point what's the current sample weight 
 #add new rays to the ray queue
 def shade_diffuse(ps,P,N,ray,Ci,smp):
@@ -188,12 +243,10 @@ def shade_specular(ps,P,N,ray,Ci,smp):
     pdf = 1
     return Ci,Ray(P+N*0.0001,d,pdf)
 
-def occlusion(ps,P,N,ray,Ci,smp):
+def occlusion(t,i,j,P,N,ray,Ci,smp):
     #calculate direct lighting
     if transmission(ray):
-        rgb = ps.t * ((Ci * color_light) * (np.dot(N,ray.d) * M_INVPI))
-        i = ps.xy[0]
-        j = ps.xy[1]
+        rgb = t * ((Ci * color_light) * (np.dot(N,ray.d) * M_INVPI))
         img[h-j-1,i] += rgb
              
 
@@ -207,50 +260,85 @@ def trace(ps,ray,smp):
         #camera ray
 
     obj, M, N, col_ray = traced
-    shade(ps,M,N,ray,col_ray,smp)
+    #shade(ps,M,N,ray,col_ray,smp)
+    shadequeue.put((ps,M,N,ray,col_ray,smp))
+
 
 def shade(ps,M,N,ray,col_ray,smp):
     #calculate direct lighting
     rayToLight = Ray(M+N*0.0001,(L-M))
     rayToLight.d = normalize(rayToLight.d)
-    occlusion(ps,M,N,rayToLight,col_ray,smp)  
+    #occlusion(ps,M,N,rayToLight,col_ray,smp) 
+    occlusionqueue.put((ps.t,ps.i,ps.j,M,N,rayToLight,col_ray,smp))
 
     #generate the next ray
     Cs,newray = shade_diffuse(ps,M,N,ray,col_ray,smp)
     newray.depth = ray.depth+1
     #add to the ray queue
-    trace(ps,newray,smp)
+    rayqueue.put((ps,newray,smp))
+   # trace(ps,newray,smp)
 
-def sample_old(ps,ray):
-    depth = 0
-    smp = Sampler(256)
-    # Loop through initial and secondary rays.
-    while depth < depth_max:
-        traced = trace_ray(ray)
-        if not traced:
-            #miss, add environment
-           # ps.rgb += ps.t * environment(ray.d)
-            break
-        obj, M, N, col_ray = traced
-        depth += 1
-
-        #calculate direct lighting
-        rayToLight = Ray(M+N*0.0001,(L-M))
-        rayToLight.d = normalize(rayToLight.d)
-        occlusion(ps,M,N,rayToLight,col_ray,smp)
-
-        #indirect
-        Cs,ray = shade_diffuse(ps,M,N,ray,col_ray,smp)
-
-    return ps
-
-def sample(ps,ray):
-    smp = Sampler(256)
+def trace_camera_ray(ps,ray,smp):
     traced = trace_ray(ray)
     if not traced:
         return
     obj,M,N, col_ray = traced
-    shade(ps,M,N,ray,col_ray,smp)
+    shadequeue.put((ps,M,N,ray,col_ray,smp))
+
+#def camera_ray_queue_handler():
+##    print ("camera_ray_queue_handler active")
+#    while True:
+#        raycontext = camerarayqueue.get()
+#        ps,ray,smp = raycontext
+#        trace_camera_ray(ps,ray,smp)
+
+def camera_ray_callback(ch, method, properties, body):
+    print("[x] Received: ")
+    raycontext = json.loads(body)
+    ps = PixelSample()
+    ps.from_dict(raycontext[0])
+    ray = Ray()
+    ray.from_dict(raycontext[1])
+    trace_camera_ray(ps,ray,smp)
+
+def ray_queue_handler():
+    while True:
+        raycontext = rayqueue.get()
+        ps,newray,smp = raycontext
+        trace(ps,newray,smp)
+        rayqueue.task_done()
+
+def shade_queue_handler():
+    while True:
+        shadecontext = shadequeue.get()
+        ps,P,N,ray,Cs,smp = shadecontext
+        shade(ps,P,N,ray,Cs,smp)
+        shadequeue.task_done()
+
+def occlusion_queue_handler():
+    while True:
+        occlusioncontext = occlusionqueue.get()
+        t,i,j,P,N,ray,col_ray,smp = occlusioncontext
+        occlusion(t,i,j,P,N,ray,col_ray,smp)
+        occlusionqueue.task_done()
+
+def sample(ps,ray):
+    smp = Sampler(256)
+ #   trace_camera_ray(ps,ray,smp)
+    #camerarayqueue.put((ps,ray,smp))
+    camerarayqueue.put((ps,ray))
+
+#    print(json.dumps(ps.__dict__))
+   # channel.basic_publish(exchange='',routing_key='camerarayqueue',body=json.dumps({'ray':ray.__dict__(),'ps':ps.__dict__}))
+ #   return
+
+ ##   traced = trace_ray(ray)
+#    if not traced:
+#       return
+#    obj,M,N, col_ray = traced
+    #shade(ps,M,N,ray,col_ray,smp)
+#    shadequeue.put((ps,M,N,ray,col_ray,smp))
+
 
 def render_scene():
     #bin rays based on direction (and origin?)
@@ -288,20 +376,39 @@ def render_scene():
                 #img[h - j - 1, i, :] += np.clip(ps.rgb, 0, 1) / samples
                 #update_pixel(ps)
                 #img[h-j-1,i] = (img[h-j-1,i] / weights[h-j-1,i]) + (np.clip(ps.rgb,0,1) / weights[h-j-1,i])
+    wait(6000)
 
-
-
-@app.route('/fullrender')  
-def fullRender():  
-    render_scene()
-    outstring = io.BytesIO()
-    imsave(outstring, img, plugin='pil', format_str='png')
-    outstring.seek(0)
-    return send_file(outstring, attachment_filename='test.png',mimetype='image/png')
 
 @app.route('/render')  
 def startRender():
+    print("render")
     #t = Thread(target = render_scene)
+    #start trace worker threads
+    #for i in range(cameraray_threads):
+     #   worker = Thread(target = camera_ray_queue_handler)
+    #    worker.setDaemon(True)
+    #    worker.start()
+
+    #start trace worker threads
+    for i in range(ray_threads):
+        worker = Thread(target = ray_queue_handler)
+        worker.setDaemon(True)
+        worker.start()
+
+    #start shade worker threads
+    for i in range(shade_threads):
+        worker = Thread(target = shade_queue_handler)
+        worker.setDaemon(True)
+        worker.start()
+
+    #start shade worker threads
+    for i in range(occlusion_threads):
+        worker = Thread(target = occlusion_queue_handler) 
+        worker.setDaemon(True)
+        worker.start()
+
+    print("start render")
+  #  render_scene()
     if not t.is_alive():
         print("starting render")
         t.start()
@@ -309,7 +416,6 @@ def startRender():
         stopped = True
         t.join()
         t.start()
-    #render_scene()
     outstring = io.BytesIO()
     #img = np.clip(img,0,1)
     imsave(outstring, img.clip(0,1), plugin='pil', format_str='png')
@@ -329,6 +435,15 @@ def exit():
     quit = True
     return('quitting')
 
+@app.route('/flush')
+def flush():
+    channel.basic_consume(camera_ray_callback,queue='camerarayqueue',no_ack=True)
+
+
+def setup_listeners():
+    channel.basic_consume(camera_ray_callback,queue='camerarayqueue',no_ack=True)
+    channel.start_consuming()
+
 # List of objects.
 color_plane0 = 1. * np.ones(3)
 color_plane1 = 0. * np.ones(3)
@@ -338,6 +453,10 @@ scene = [add_sphere([.75, .1, 1.], .6, [0.1, 0.1, 0.9]),
          add_plane([0., -.5, 0.], [0.0, 1.0, 0.0]),
     ]
 
+cameraray_threads = 2
+ray_threads = 2
+shade_threads = 2
+occlusion_threads = 2
 depth_max = 5  # Maximum number of light reflections.
 samples = 16
 filterwidth = 2.0
@@ -366,5 +485,15 @@ r = float(w) / h
 S = (-1., -1. / r + .25, 1., 1. / r + .25)
 
 
+camerarayqueue = QueueWrapper('camerarayqueue')
+rayqueue = queue.Queue()
+shadequeue = queue.Queue()
+occlusionqueue = queue.Queue()
+
 if __name__ == '__main__':
-    app.run(debug=True,host='0.0.0.0')
+    print (sys.argv)
+    if sys.argv[-1] == "control":    
+        #run the rest server an wait for commands
+        app.run(debug=True,host='0.0.0.0')
+    elif sys.argv[-1] == "server":
+        setup_listeners()

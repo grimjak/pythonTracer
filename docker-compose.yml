@@ -1,0 +1,26 @@
+version: '3'
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "8080:15672"
+  rendercontrol:
+    build: .
+    ports:
+     - "5000:5000"
+    environment:
+     - FLASK_DEBUG=1
+     - FLASK_APP=main.py
+    volumes:
+     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+    links:
+      - rabbitmq
+    command: python ./main.py control
+
+  renderserver:
+    build: .
+    volumes:
+     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+    links:
+      - rabbitmq
+    command: python ./main.py server
