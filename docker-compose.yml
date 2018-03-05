@@ -16,7 +16,6 @@ services:
     links:
       - rabbitmq
     command: python ./main.py control
-
   renderserver:
     build: .
     volumes:
@@ -24,3 +23,10 @@ services:
     links:
       - rabbitmq
     command: python ./main.py server
+  renderwriter:
+    build: .
+    volumes:
+     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+    links:
+      - rabbitmq
+    command: python ./main.py writer
