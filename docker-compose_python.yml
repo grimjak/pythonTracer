@@ -18,22 +18,22 @@ services:
     command: python ./main.py control
   rayserver:
     build:
-      context: ./embree
+      context: .
       dockerfile: DockerFile
     volumes:
      - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
     links:
       - rabbitmq
-    command: result rays
+    command: python ./rayserver.py
   occlusionserver:
     build:
-      context: ./embree
+      context: .
       dockerfile: DockerFile
     volumes:
      - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
     links:
       - rabbitmq
-    command: result occlusion
+    command: python ./rayserver.py
   shadeserver:
     build: .
     volumes:
