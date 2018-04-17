@@ -95,7 +95,7 @@ class QueueWrapper():
         channel.queue_declare(queue=key)
 
     def put(self,data):
-        channel.basic_publish(exchange='',routing_key=self.key,body=json.dumps(data))
+        channel.basic_publish(exchange='ptex',routing_key=self.key,body=json.dumps(data))
 
 
 def normalize(x):

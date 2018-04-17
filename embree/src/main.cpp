@@ -1,6 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
-#include <SimpleAmqpClient/SimpleAmqpClient.h>
+//#include <SimpleAmqpClient/SimpleAmqpClient.h>
 #include "AMQPcpp.h"
 
 #include <iostream>
@@ -22,7 +22,7 @@
 
 #include <tbb/concurrent_queue.h>
 
-using namespace AmqpClient;
+//using namespace AmqpClient;
 using namespace std;
 using namespace rapidjson;
 using namespace embree;
@@ -126,7 +126,7 @@ unsigned int createSphere (RTCBuildQuality quality, std::vector<float> pos, cons
 }
 
 /* adds a ground plane to the scene */
-unsigned int addGroundPlane (RTCScene scene_i)
+unsigned int addGroundPlane (RTCBuildQuality quality, RTCScene scene_i)
 {
   /* create a triangulated plane with 2 triangles and 4 vertices */
   RTCGeometry geom = rtcNewGeometry (g_device, RTC_GEOMETRY_TYPE_TRIANGLE);
@@ -158,12 +158,11 @@ void rayworker(int tid)
     RayJob rj;
 
     std::string host ="rabbitmq";
-
-    Channel::ptr_t channel;
-
-    channel = Channel::Create(host);//host rabbit shoould work here from compose file, but had to define i
     std::string shadequeue = "shadequeue";
-    channel->DeclareExchange(shadequeue,"fanout",false,false,false);
+
+    AMQP amqp(host);
+    AMQPExchange *ex = amqp.createExchange("ptex");
+    ex->Declare("ptex","direct");
 
     cout << "ray worker: " << tid << " started" << endl;
     while(true)
@@ -237,10 +236,8 @@ void rayworker(int tid)
             writer.Double(1.0);writer.Double(1.0);writer.Double(1.0);
             writer.EndArray();
             writer.EndObject();
-  
-            BasicMessage::ptr_t outgoing_message = BasicMessage::Create();
-            outgoing_message->Body(s.GetString());
-            channel->BasicPublish("",shadequeue,outgoing_message);
+
+            ex->Publish(s.GetString(),shadequeue);
 
            //    cout << s.GetString() << endl;
         }
@@ -257,12 +254,11 @@ void occlusionworker(int tid)
     OcclusionJob rj;
 
     std::string host ="rabbitmq";
-
-    Channel::ptr_t channel;
-
-    channel = Channel::Create(host);//host rabbit shoould work here from compose file, but had to define i
     std::string radiancequeue = "radiancequeue";
-    channel->DeclareExchange(radiancequeue,"fanout",false,false,false);
+
+    AMQP amqp(host);
+    AMQPExchange *ex = amqp.createExchange("ptex");
+    ex->Declare("ptex","direct");
 
     cout << "occlusion worker: " << tid << " started" << endl;
     while(true)
@@ -304,10 +300,8 @@ void occlusionworker(int tid)
             writer.Double(rad.x);writer.Double(rad.y);writer.Double(rad.z);
             writer.EndArray();
             writer.EndObject();
-  
-            BasicMessage::ptr_t outgoing_message = BasicMessage::Create();
-            outgoing_message->Body(s.GetString());
-            channel->BasicPublish("",radiancequeue,outgoing_message);
+
+            ex->Publish(s.GetString(),radiancequeue);
         }
       }
     }
@@ -326,7 +320,7 @@ void setup_scene()
     int id = createSphere(quality,{.75, .1, 1.}, .6);
     id = createSphere(quality,{-.75, .1, 2.25}, .6);
     id = createSphere(quality,{-2.75, .1, 3.5}, .6);
-    id = addGroundPlane(g_scene);
+    id = addGroundPlane(quality,g_scene);
 
     rtcCommitScene(g_scene);
 }
@@ -453,7 +447,7 @@ int main(int argc, char *argv[])
 		AMQPQueue * queue = amqp.createQueue(queuename);
 
 		queue->Declare();
-		//qu2->Bind( "", "");
+		queue->Bind( "ptex", "");
 
 		queue->setConsumerTag("tag_123");
     if(occlusion)	queue->addEvent(AMQP_MESSAGE, occlusionMessageHandler );

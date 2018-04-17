@@ -12,39 +12,39 @@ services:
      - FLASK_DEBUG=1
      - FLASK_APP=main.py
     volumes:
-     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: python ./main.py control
   rayserver:
     build:
       context: ./embree
-      dockerfile: DockerFile
+      dockerfile: Dockerfile
     volumes:
-     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+     - .:/usr/src//app
     links:
       - rabbitmq
-    command: result rays
+    command: ./result rays
   occlusionserver:
     build:
       context: ./embree
-      dockerfile: DockerFile
+      dockerfile: Dockerfile
     volumes:
-     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+     - .:/usr/src//app
     links:
       - rabbitmq
-    command: result occlusion
+    command: ./result occlusion
   shadeserver:
     build: .
     volumes:
-     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: python ./shadeserver.py   
   renderwriter:
     build: .
     volumes:
-     - /d/gfsja/Documents/dev/dockerDev/pythonTracer:/usr/src//app
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: python ./writer.py
