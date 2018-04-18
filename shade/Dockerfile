@@ -5,18 +5,18 @@ FROM ubuntu:xenial as builder
 # Get g++ for compiling, wget to download Boost, git to clone source code repo,
 # and make to automate program compilation with Makefile provided
 RUN apt-get update \
-  && apt-get install -y git \
-                        g++ \
-                        make \
+  && apt-get install -y build-essential \
+                        git \
                         cmake \
-                        openssl \
-                        libssl-dev \
-                        libblkid-dev e2fslibs-dev libboost-all-dev libaudit-dev \
-                        wget \
+                        openssl libssl-dev \
+                        libboost-all-dev \
+                        flex bison \
                         libtbb-dev \
-                        cmake-curses-gui \
-                        freeglut3-dev \
-                        libxmu-dev libxi-dev
+                        libpugixml-dev \
+                        libilmbase-dev \
+                        libopenimageio-dev \
+                        llvm  \
+                        clang-3.5
 
 RUN \
 	rm -rf rabbitmq-c && \
@@ -31,17 +31,6 @@ RUN \
 	cd / && rm -rf rabbitmq-c
 
 RUN \
-  rm -rf SimpleAmqpClient && \
-  git clone https://github.com/alanxz/SimpleAmqpClient.git && \
-  cd SimpleAmqpClient && \
-  mkdir -p simpleamqpclient-build2 && \
-  cd simpleamqpclient-build2 && cmake .. && \
-  cmake --build . && \
-  cmake -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_PREFIX=/usr/local .. && \ 
-  make && make install && \
-  cd / && rm -rf SimpleAmqpClient
-
-RUN \
   rm -rf amqpcpp && \
   git clone https://github.com/akalend/amqpcpp.git && \
   cd amqpcpp && \
@@ -53,18 +42,6 @@ USER root
 WORKDIR /app
 
 RUN \
-  git clone https://github.com/embree/embree.git
-
-RUN \
-  cd embree && mkdir build && cd build && cmake -DEMBREE_ISPC_SUPPORT=OFF .. && make
- 
-#RUN \
-#  rm -rf embree-3.0.0.x86_64.linux && \
-#  wget https://github.com/embree/embree/releases/download/v3.0.0/embree-3.0.0.x86_64.linux.tar.gz && \ 
-#  tar xvf embree-3.0.0.x86_64.linux.tar.gz && \
-#  cp -r embree-3.0.0.x86_64.linux/* /app/embree
-
-RUN \
   mkdir tmp && \
   cd tmp && \ 
   git clone https://github.com/Tencent/rapidjson.git && \
@@ -72,7 +49,6 @@ RUN \
 
 COPY . /app
 
-#RUN /bin/bash -c "source embree/embree-vars.sh && make VERBOSE=1"
 WORKDIR /app
 RUN make VERBOSE=1
 
@@ -81,7 +57,4 @@ FROM ubuntu:xenial
 WORKDIR /app
 ENV LD_LIBRARY_PATH=.
 COPY --from=builder /app/result ./result
-COPY --from=builder /app/embree/build/libembree3* ./
-COPY --from=builder /usr/lib/x86_64-linux-gnu/libtbb* ./
-#RUN apt-get update && apt-get install -y libtbb-dev
 CMD ["/app/result"]

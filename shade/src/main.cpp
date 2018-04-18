@@ -17,40 +17,42 @@
 
 #include <tbb/concurrent_queue.h>
 
-using namespace AmqpClient;
+#include <OpenEXR/ImathVec.h>
+
 using namespace std;
 using namespace rapidjson;
 using namespace tbb;
+using namespace Imath_2_2;
  
 typedef struct PixelSample {
   int o, w, i, j; 
-  Vec3fa t;
-  Serialize(Writer &writer)
-  {
+  V3f t;
+  //void Serialize(Writer &writer)
+  //{
 
-  }
+  //}
   } PixelSample;
-typedef struct TRay {float pdf; int depth; Vec3fa o, d;} TRay;
+typedef struct TRay {float pdf; int depth; V3f o, d;} TRay;
 
 typedef struct ShadeJob {
   PixelSample ps; 
-  Vec3f P;
-  Vec3f N;
+  V3f P;
+  V3f N;
   TRay tray;
-  RayJob(){};
-  RayJob(PixelSample p,Vec3f pp,vec3f nn,TRay t):ps(p),P(pp),N(nn),tray(t)
+  ShadeJob(){};
+  ShadeJob(PixelSample p,V3f pp,V3f nn,TRay t):ps(p),P(pp),N(nn),tray(t)
   {};
 } ShadeJob;
 
 concurrent_queue<ShadeJob> shadeworkqueue;
 
-void rayworker(int tid)
+void shadeworker(int tid)
 {
     PixelSample ps;
-    Vec3f P;
-    Vec3f N;
+    V3f P;
+    V3f N;
     TRay tray;
-    RayJob rj;
+    ShadeJob rj;
 
     std::string host ="rabbitmq";
     std::string occlusionqueue = "occlusionqueue";
@@ -124,7 +126,7 @@ int onCancel(AMQPMessage * message ) {
 	return 0;
 }
 
-int  rayMessageHandler( AMQPMessage * message  ) 
+int  shadeMessageHandler( AMQPMessage * message  ) 
 {
   uint32_t j = 0;
 	char * data = message->getMessage(&j);
@@ -138,7 +140,7 @@ int  rayMessageHandler( AMQPMessage * message  )
     ps.j = document["ps"]["j"].GetInt();
     ps.o = document["ps"]["o"].GetInt();
     ps.w = document["ps"]["w"].GetInt();
-    Vec3f t;
+    V3f t;
     t.x = document["ps"]["t"][0].GetFloat();t.y = document["ps"]["t"][1].GetFloat();t.z = document["ps"]["t"][2].GetFloat();
     ps.t = t;
 
@@ -146,20 +148,19 @@ int  rayMessageHandler( AMQPMessage * message  )
     TRay tray;
     tray.pdf = document["ray"]["pdf"].GetFloat();
     tray.depth = document["ray"]["depth"].GetFloat();
-    Vec3f o;
+    V3f o;
     o.x = document["ray"]["o"][0].GetFloat();o.y = document["ray"]["o"][1].GetFloat();o.z = document["ray"]["o"][2].GetFloat();
     tray.o = o;
-    Vec3f d;
+    V3f d;
     d.x = document["ray"]["d"][0].GetFloat();d.y = document["ray"]["d"][1].GetFloat();d.z = document["ray"]["d"][2].GetFloat();
     tray.d = d;
 
-    Vec3f N;
+    V3f N;
     N.x = document["N"][0].GetFloat();N.y = document["N"][1].GetFloat();N.z = document["N"][2].GetFloat();
-    Vec3f P;
+    V3f P;
     P.x = document["P"][0].GetFloat();P.y = document["P"][1].GetFloat();P.z = document["P"][2].GetFloat();
     
     
-    Ray ray(Vec3fa(tray.o),Vec3fa(tray.d),0.0,inf);
 
     shadeworkqueue.push( ShadeJob(ps,P,N,tray));
   }
