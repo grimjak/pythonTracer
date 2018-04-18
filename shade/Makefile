@@ -10,7 +10,7 @@ OBJS := $(addsuffix .o,$(basename $(SRCS)))
 DEPS := $(OBJS:.o=.d)
 
 INCLUDES = -I/app/include -I/amqpcpp/include
-LIBS = -L/app/embree/build -Wl,-Bstatic -lamqpcpp -lSimpleAmqpClient -lrabbitmq -lboost_chrono -lboost_system -lrt -lssl -lcrypto -Wl,-Bdynamic -ldl -lpthread
+LIBS = -L/app/embree/build -ltbb -Wl,-Bstatic -lamqpcpp -lrabbitmq -lboost_chrono -lboost_system -lrt -lssl -lcrypto -Wl,-Bdynamic -ldl -lpthread
 
 CPPFLAGS = -std=c++11 -W -Wall -Wextra -pedantic $(INCLUDES)
 LDFLAGS =
