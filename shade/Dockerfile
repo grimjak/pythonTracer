@@ -57,4 +57,6 @@ FROM ubuntu:xenial
 WORKDIR /app
 ENV LD_LIBRARY_PATH=.
 COPY --from=builder /app/result ./result
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libtbb* ./
+
 CMD ["/app/result"]
