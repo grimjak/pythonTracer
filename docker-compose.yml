@@ -35,12 +35,14 @@ services:
       - rabbitmq
     command: ./result occlusion
   shadeserver:
-    build: .
+    build:
+      context: ./shade
+      dockerfile: Dockerfile
     volumes:
      - .:/usr/src//app
     links:
       - rabbitmq
-    command: python ./shadeserver.py   
+    command: ./result   
   renderwriter:
     build: .
     volumes:

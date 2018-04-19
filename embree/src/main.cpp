@@ -352,7 +352,7 @@ int  rayMessageHandler( AMQPMessage * message  )
     //Need to clean this whole section up so we don't have multiple copies of ray data
     TRay tray;
     tray.pdf = document["ray"]["pdf"].GetFloat();
-    tray.depth = document["ray"]["depth"].GetFloat();
+    tray.depth = document["ray"]["depth"].GetInt();
     Vec3f o;
     o.x = document["ray"]["o"][0].GetFloat();o.y = document["ray"]["o"][1].GetFloat();o.z = document["ray"]["o"][2].GetFloat();
     tray.o = o;
@@ -388,7 +388,7 @@ int  occlusionMessageHandler( AMQPMessage * message  )
     //Need to clean this whole section up so we don't have multiple copies of ray data
     TRay tray;
     tray.pdf = document["ray"]["pdf"].GetFloat();
-    tray.depth = document["ray"]["depth"].GetFloat();
+    tray.depth = document["ray"]["depth"].GetInt();
     Vec3f o;
     o.x = document["ray"]["o"][0].GetFloat();o.y = document["ray"]["o"][1].GetFloat();o.z = document["ray"]["o"][2].GetFloat();
     tray.o = o;

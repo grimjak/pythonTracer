@@ -99,6 +99,10 @@ class QueueWrapper():
     def put(self,data):
         channel.basic_publish(exchange='ptex',routing_key=self.key,body=json.dumps(data))
 
+def normalize(x):
+    x /= np.linalg.norm(x)
+    return x
+
 def sample(ps,ray):
  #   trace_camera_ray(ps,ray,smp)
     jsonmessage = {'ray':ray.to_dict(),'ps':ps.to_dict()}
@@ -151,15 +155,13 @@ def startRender():
         t.join()
         t.start()
 
-    worker = Thread(target = radiance_queue_handler)
-    worker.setDaemon(True)
- #   worker.start()
+    return 'render started'
 
-    outstring = io.BytesIO()
+    #outstring = io.BytesIO()
     #img = np.clip(img,0,1)
-    imsave(outstring, img.clip(0,1), plugin='pil', format_str='png')
-    outstring.seek(0)
-    return send_file(outstring, attachment_filename='test.png',mimetype='image/png')
+    #imsave(outstring, img.clip(0,1), plugin='pil', format_str='png')
+   ## outstring.seek(0)
+  #  return send_file(outstring, attachment_filename='test.png',mimetype='image/png')
 
 cameraray_threads = 1
 ray_threads = 1
