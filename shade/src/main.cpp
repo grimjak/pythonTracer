@@ -37,6 +37,8 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
+static int depth_max = 4;
+
 typedef struct PixelSample {
   int o, w, i, j; 
   Vec3 t;
@@ -151,6 +153,7 @@ void shadeworker(int tid)
     ex->Declare("ptex","direct");
 
     cout << "shade worker: " << tid << " started" << endl;
+    int index = 0;
     while(true)
     {
       if (shadeworkqueue.try_pop(rj))
@@ -216,12 +219,18 @@ void shadeworker(int tid)
        // Vec3 wi = tray.d;
         float pdf = 1;//std::max(N.dot(wi), 0.0f) * float(M_1_PI);
         Vec3 out_dir;
-        float rx = sobol::sample(ps.o,0);
-        float ry = sobol::sample(ps.o,1);
+        index++;
+        float rx = sobol::sample(index+ps.o,0);
+        float ry = sobol::sample(index+ps.o,1);
+        cerr << rx << ", " << ry << endl;
         Sampling::sample_cosine_hemisphere(N, rx, ry, out_dir, pdf);
-        ps.t *= Cs / 1.0;
+        //ps.t *= Cs / 1.0;
         TRay ray(P+N*0.0001,out_dir.normalize());
-        ray.pdf = pdf;
+        ray.depth = tray.depth+1;
+        ray.pdf = 1;
+
+        //if (ray.depth > depth_max) continue;
+
 
         StringBuffer s2;
         writer.Reset(s2);
@@ -245,9 +254,9 @@ void shadeworker(int tid)
         writer.Key("ray");
         writer.StartObject();
         writer.Key("pdf");
-        writer.Double(tray.pdf);
+        writer.Double(ray.pdf);
         writer.Key("depth");
-        writer.Int(tray.depth);
+        writer.Int(ray.depth);
         writer.Key("o");
         writer.StartArray();
         writer.Double(ray.o.x);writer.Double(ray.o.y);writer.Double(ray.o.z);
@@ -257,7 +266,10 @@ void shadeworker(int tid)
         writer.Double(ray.d.x);writer.Double(ray.d.y);writer.Double(ray.d.z);
         writer.EndArray();
         writer.EndObject();
+        writer.EndObject();
 
+        cerr<<"occlusion ray: " << s.GetString() << endl;
+        cerr<<"publishing indirect ray: " << s2.GetString() << " to " <<rayqueue<<endl;
         ex->Publish(s2.GetString(),rayqueue);
 
       }

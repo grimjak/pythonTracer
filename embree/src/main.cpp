@@ -19,6 +19,8 @@
 #include "rapidjson/document.h"
 #include "rapidjson/writer.h"
 #include "rapidjson/stringbuffer.h"
+#include "rapidjson/error/en.h"
+
 
 #include <tbb/concurrent_queue.h>
 
@@ -185,7 +187,8 @@ void rayworker(int tid)
             Vec3f N = normalize(ray.Ng);
            // cout << P << endl;
            // cout << ray.org <<endl;
-
+          try 
+          {
             StringBuffer s;
             Writer<StringBuffer> writer(s);
             writer.StartObject();
@@ -238,7 +241,9 @@ void rayworker(int tid)
             writer.EndObject();
 
             ex->Publish(s.GetString(),shadequeue);
-
+          } catch (const std::exception& e) {
+            cerr << "problem with message: " << endl;
+          }
            //    cout << s.GetString() << endl;
         }
       }
@@ -276,6 +281,8 @@ void occlusionworker(int tid)
 
         if (ray.tfar >= 0.0f)
         {
+          try
+          {
             StringBuffer s;
             Writer<StringBuffer> writer(s);
             writer.StartObject();
@@ -302,6 +309,9 @@ void occlusionworker(int tid)
             writer.EndObject();
 
             ex->Publish(s.GetString(),radiancequeue);
+          } catch (const std::exception& e) {
+            cerr << "problem with message: " << endl;
+          }
         }
       }
     }
@@ -338,7 +348,16 @@ int  rayMessageHandler( AMQPMessage * message  )
 	if (data)
   {
     Document document;
-    document.Parse(data);
+    try
+    {
+      ParseResult result = document.Parse(data);
+      std::cerr << data << endl; 
+      if (!result) {
+        std::cerr << "Ray message handler: JSON parse error: " << GetParseError_En(result.Code()) << result.Offset() << endl;
+        std::cerr << data << endl; 
+        assert(false);
+        return 0; // skip loop ;-)
+      }
 
     PixelSample ps;
     ps.i = document["ps"]["i"].GetInt();
@@ -359,10 +378,13 @@ int  rayMessageHandler( AMQPMessage * message  )
     Vec3f d;
     d.x = document["ray"]["d"][0].GetFloat();d.y = document["ray"]["d"][1].GetFloat();d.z = document["ray"]["d"][2].GetFloat();
     tray.d = d;
-
+    
     Ray ray(Vec3fa(tray.o),Vec3fa(tray.d),0.0,inf);
 
     rayworkqueue.push( RayJob(ray,ps,tray));
+    } catch (const std::exception& e) {
+      cerr << "problem with message: " << data << endl;
+    }
   }
   return 0;
 }
@@ -374,8 +396,13 @@ int  occlusionMessageHandler( AMQPMessage * message  )
 	if (data)
   {
     Document document;
-    document.Parse(data);
-
+    try
+    {
+      ParseResult result = document.Parse(data);
+      if (!result) {
+        std::cerr << "Occlusion message handler: JSON parse error: " << GetParseError_En(result.Code()) << result.Offset() << endl;
+        std::cerr << data << endl;        return 0; // skip loop ;-)
+      }
     PixelSample ps;
     ps.i = document["ps"]["i"].GetInt();
     ps.j = document["ps"]["j"].GetInt();
@@ -402,6 +429,9 @@ int  occlusionMessageHandler( AMQPMessage * message  )
     Ray ray(Vec3fa(tray.o),Vec3fa(tray.d),0.001,inf);
 
     occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
+    } catch (const std::exception& e) {
+      cerr << "problem with message: " << data << endl;
+    }
   }
   return 0;
 }
