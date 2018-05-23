@@ -162,7 +162,6 @@ void shadeworker(int tid)
         P = rj.P;
         N = rj.N;
         tray = rj.tray;
-        Vec3 wi = Vec3(tray.d.x,tray.d.y,tray.d.z);
         Vec3 Cs = Vec3(1,1,1);
         
         //do shading
@@ -218,21 +217,20 @@ void shadeworker(int tid)
 
         //indirect ray
        // Vec3 wi = tray.d;
-        float pdf = 1;
+        float pdf = std::max(N.dot(wi), 0.0f) * float(M_1_PI);
         Vec3 out_dir;
         index++;
         float rx = sobol::sample(index+ps.o,0);
         float ry = sobol::sample(index+ps.o,1);
+        cerr << rx << ", " << ry << endl;
         Sampling::sample_cosine_hemisphere(N, rx, ry, out_dir, pdf);
-        //pdf = std::max(N.dot(wi), 0.0f) * float(M_1_PI); //incoming pdf
-
-        Vec3 t = Vec3(ps.t.x,ps.t.y,ps.t.z);
-        t *= Cs / tray.pdf;
+        ps.t *= Cs / 1.0;
         TRay ray(P+N*0.0001,out_dir.normalize());
         ray.depth = tray.depth+1;
-        ray.pdf = std::max(N.dot(out_dir), 0.000001f) * float(M_1_PI);;
+        ray.pdf = 1;
 
         //if (ray.depth > depth_max) continue;
+
 
         StringBuffer s2;
         writer.Reset(s2);
@@ -249,7 +247,7 @@ void shadeworker(int tid)
         writer.Int(ps.w);
         writer.Key("t");
         writer.StartArray();
-        writer.Double(t.x);writer.Double(t.y);writer.Double(t.z);
+        writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
         writer.EndArray();
         writer.EndObject();
 
@@ -270,8 +268,8 @@ void shadeworker(int tid)
         writer.EndObject();
         writer.EndObject();
 
-        //cerr<<"occlusion ray: " << s.GetString() << endl;
-        //cerr<<"publishing indirect ray: " << s2.GetString() << " to " <<rayqueue<<endl;
+        cerr<<"occlusion ray: " << s.GetString() << endl;
+        cerr<<"publishing indirect ray: " << s2.GetString() << " to " <<rayqueue<<endl;
         ex->Publish(s2.GetString(),rayqueue);
 
       }
