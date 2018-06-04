@@ -42,6 +42,8 @@ static int depth_max = 4;
 typedef struct PixelSample {
   int o, w, i, j; 
   Vec3 t;
+  PixelSample(){};
+  PixelSample(int offset, weight, ii, jj, Vec3 throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
   //void Serialize(Writer &writer)
   //{
 
@@ -135,149 +137,83 @@ struct Sampling {
 
 concurrent_queue<ShadeJob> shadeworkqueue;
 
-
-void shadeworker(int tid)
+//generate a single sample for a given set of coordinates
+//x and y in NDC, 0 to 1
+//need to define O
+TRay void generateSample(float x, y)
 {
-    PixelSample ps;
-    Vec3 P;
-    Vec3 N;
-    TRay tray;
-    ShadeJob rj;
+  Vec3 Q = Vec3(x,y,0);
+  Vec3 D = (Q-O).normalize();
 
-    std::string host ="rabbitmq";
-    std::string occlusionqueue = "occlusionqueue";
-    std::string rayqueue = "rayqueue";
+  return TRay(O,D);
+}
 
-    AMQP amqp(host);
-    AMQPExchange *ex = amqp.createExchange("ptex");
-    ex->Declare("ptex","direct");
+//generate one iterations worth of samples
+//need to define w and h and filterwidth
+// iterate over pixels, need to keep track of index
+void iterate(int &index, int iteration)
+{
+  std::string host ="rabbitmq";
+  std::string rayqueue = "rayqueue";
 
-    cout << "shade worker: " << tid << " started" << endl;
-    int index = 0;
-    while(true)
+  AMQP amqp(host);
+  AMQPExchange *ex = amqp.createExchange("ptex");
+  ex->Declare("ptex","direct");
+
+  for (int i = 0; i<w; i++)
+  {
+
+    for (int j = 0; j<h; j++)
     {
-      if (shadeworkqueue.try_pop(rj))
-      {
-        ps = rj.ps;
-        P = rj.P;
-        N = rj.N;
-        tray = rj.tray;
-        Vec3 wi = Vec3(tray.d.x,tray.d.y,tray.d.z);
-        Vec3 Cs = Vec3(1,1,1);
-        
-        //do shading
-        //direct lighting
-        Vec3 L = Vec3(5,5,-10);
-        Vec3 color_light(1,1,1);
-        TRay rayToLight(P+N*0.0001,(L-P).normalize());
-        //calculate radiance here and pass it to be added if ray hits?
-        Vec3 rad = ps.t * color_light * Cs * N.dot(rayToLight.d) * M_1_PI; //separate PDF
+      float rx = sobol::sample(index++,0);
+      float ry = sobol::sample(index,1);
 
-        StringBuffer s;
-        Writer<StringBuffer> writer(s);
-        writer.StartObject();
-        writer.Key("ps");
-        writer.StartObject();
-        writer.Key("i");
-        writer.Int(ps.i);
-        writer.Key("j");
-        writer.Int(ps.j);
-        writer.Key("o");
-        writer.Int(ps.o);
-        writer.Key("w");
-        writer.Int(ps.w);
-        writer.Key("t");
-        writer.StartArray();
-        writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
-        writer.EndArray();
-        writer.EndObject();
+      float x = i / w - 0.5;
+      float y = j / h - 0.5; //wrong, need to take into account aspect ratio
 
-        writer.Key("ray");
-        writer.StartObject();
-        writer.Key("pdf");
-        writer.Double(tray.pdf);
-        writer.Key("depth");
-        writer.Int(tray.depth);
-        writer.Key("o");
-        writer.StartArray();
-        writer.Double(rayToLight.o.x);writer.Double(rayToLight.o.y);writer.Double(rayToLight.o.z);
-        writer.EndArray();
-        writer.Key("d");
-        writer.StartArray();
-        writer.Double(rayToLight.d.x);writer.Double(rayToLight.d.y);writer.Double(rayToLight.d.z);
-        writer.EndArray();
-        writer.EndObject();
+      TRay r = generateSample(x,y);
+      int o = 0; //needs to be a random offset
+      PixelSample ps = PixelSample(o,iteration,i,j,Vec3(1,1,1));
 
-        writer.Key("rad");
-        writer.StartArray();
-        writer.Double(rad.x);writer.Double(rad.y);writer.Double(rad.z);
-        writer.EndArray();
-        writer.EndObject();
+      StringBuffer s;
+      Writer<StringBuffer> writer(s);
+      writer.StartObject();
+      writer.Key("ps");
+      writer.StartObject();
+      writer.Key("i");
+      writer.Int(ps.i);
+      writer.Key("j");
+      writer.Int(ps.j);
+      writer.Key("o");
+      writer.Int(ps.o);
+      writer.Key("w");
+      writer.Int(ps.w);
+      writer.Key("t");
+      writer.StartArray();
+      writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
+      writer.EndArray();
+      writer.EndObject();
 
-        ex->Publish(s.GetString(),occlusionqueue);
+      writer.Key("ray");
+      writer.StartObject();
+      writer.Key("pdf");
+      writer.Double(tray.pdf);
+      writer.Key("depth");
+      writer.Int(tray.depth);
+      writer.Key("o");
+      writer.StartArray();
+      writer.Double(rayToLight.o.x);writer.Double(rayToLight.o.y);writer.Double(rayToLight.o.z);
+      writer.EndArray();
+      writer.Key("d");
+      writer.StartArray();
+      writer.Double(rayToLight.d.x);writer.Double(rayToLight.d.y);writer.Double(rayToLight.d.z);
+      writer.EndArray();
+      writer.EndObject();
 
-        //indirect ray
-       // Vec3 wi = tray.d;
-        float pdf = 1;
-        Vec3 out_dir;
-        index++;
-        float rx = sobol::sample(index+ps.o,0);
-        float ry = sobol::sample(index+ps.o,1);
-        Sampling::sample_cosine_hemisphere(N, rx, ry, out_dir, pdf);
-        //pdf = std::max(N.dot(wi), 0.0f) * float(M_1_PI); //incoming pdf
+      ex->Publish(s.GetString(),occlusionqueue);
 
-        Vec3 t = Vec3(ps.t.x,ps.t.y,ps.t.z);
-        t *= Cs * tray.pdf;
-        cerr<<"t= "<<t<<endl;
-        TRay ray(P+N*0.0001,out_dir.normalize());
-        ray.depth = tray.depth+1;
-        ray.pdf = pdf;
-       // ray.pdf = std::max(N.normalize().dot(out_dir.normalize()), 0.000000f) * M_1_PI;
-
-        if (ray.depth > depth_max) continue;
-
-        StringBuffer s2;
-        writer.Reset(s2);
-        writer.StartObject();
-        writer.Key("ps");
-        writer.StartObject();
-        writer.Key("i");
-        writer.Int(ps.i);
-        writer.Key("j");
-        writer.Int(ps.j);
-        writer.Key("o");
-        writer.Int(ps.o);
-        writer.Key("w");
-        writer.Int(ps.w);
-        writer.Key("t");
-        writer.StartArray();
-        writer.Double(t.x);writer.Double(t.y);writer.Double(t.z);
-        writer.EndArray();
-        writer.EndObject();
-
-        writer.Key("ray");
-        writer.StartObject();
-        writer.Key("pdf");
-        writer.Double(ray.pdf);
-        writer.Key("depth");
-        writer.Int(ray.depth);
-        writer.Key("o");
-        writer.StartArray();
-        writer.Double(ray.o.x);writer.Double(ray.o.y);writer.Double(ray.o.z);
-        writer.EndArray();
-        writer.Key("d");
-        writer.StartArray();
-        writer.Double(ray.d.x);writer.Double(ray.d.y);writer.Double(ray.d.z);
-        writer.EndArray();
-        writer.EndObject();
-        writer.EndObject();
-
-        //cerr<<"occlusion ray: " << s.GetString() << endl;
-        //cerr<<"publishing indirect ray: " << s2.GetString() << " to " <<rayqueue<<endl;
-        ex->Publish(s2.GetString(),rayqueue);
-
-      }
     }
+  }
 }
 
 int onCancel(AMQPMessage * message ) {
@@ -285,7 +221,7 @@ int onCancel(AMQPMessage * message ) {
 	return 0;
 }
 
-int  shadeMessageHandler( AMQPMessage * message  ) 
+int  raygenMessageHandler( AMQPMessage * message  ) 
 {
   uint32_t j = 0;
 	char * data = message->getMessage(&j);
@@ -326,18 +262,21 @@ int  shadeMessageHandler( AMQPMessage * message  )
   return 0;
 }
 
+//wait for a command to send some rays then send a batch of samples
+//each sample is importance sampled according to the filter being used.
+
 int main(int argc, char *argv[])
 {
   cout << "Subscriber started" << endl;
 
   std::string host ="rabbitmq";
-  std::string queuename = "shadequeue";
+  std::string queuename = "raygenqueue";
 
   //added delay for rabbit mq start to avoid failing with socket error
   std::this_thread::sleep_for(std::chrono::milliseconds(10000));
     
   //thread for tracing rays
-  const int numthreads = 2;
+  const int numthreads = 1;
   std::thread shadeworkthreads[numthreads];
   //launch threads
 
@@ -352,7 +291,7 @@ int main(int argc, char *argv[])
 		//qu2->Bind( "", "");
 
 		queue->setConsumerTag("tag_123");
-    queue->addEvent(AMQP_MESSAGE, shadeMessageHandler);
+    queue->addEvent(AMQP_MESSAGE, raygenMessageHandler);
 		queue->addEvent(AMQP_CANCEL, onCancel );
 
 		queue->Consume(AMQP_NOACK);//
