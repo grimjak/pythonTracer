@@ -38,7 +38,7 @@ while True:
 
 channel = connection.channel()
 
-w = 640
+w = 640 
 h = 480
 M_PI = 3.14159265358979323846
 M_INVPI = 1/ M_PI
@@ -124,16 +124,19 @@ def render_scene():
             if i % 10 == 0:
                 print (i / float(w) * 100, "%")
             for j, y in enumerate(np.linspace(S[1], S[3], h)):
-                offsetu = filterwidth * smp.sample2d()[0]
-                offsetv = filterwidth * smp.sample2d()[1]
-                Q[:2] = (x+(offsetu-(filterwidth/2.0))/w, y+(offsetv-(filterwidth/2.0))/h)
-
+                offsetu = filterwidth * smp.sample2d()[0] - (filterwidth/2.0)
+                offsetv = filterwidth * smp.sample2d()[1] - (filterwidth/2.0)
+                print(x,y,offsetu,offsetv)
+               # Q[:2] = (x+(offsetu-(filterwidth/2.0))/w, y+(offsetv-(filterwidth/2.0))/h)
+               # Q[:2] = (x+(offsetu-(filterwidth/2.0)/w), y+(offsetv-(filterwidth/2.0)/h))
+                Q[:2] = (x+offsetu/w,y+offsetv/h)
                 D = normalize(Q - O)
                 ray = Ray(O, D)
 
                 ps = PixelSample(i,j,o=random.randint(0,256),w=s+1)
                 #weights[h-j-1,i] += 1 
                 sample(ps,ray)
+
 
                 if stopped:
                     break
@@ -168,7 +171,7 @@ ray_threads = 1
 shade_threads = 1
 occlusion_threads = 1
 depth_max = 4  # Maximum number of light reflections.
-samples = 4
+samples = 16
 filterwidth = 2.0
 smp = Sampler(w*h*samples)
 
