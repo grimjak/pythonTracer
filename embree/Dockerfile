@@ -5,7 +5,8 @@ FROM ubuntu:xenial as builder
 # Get g++ for compiling, wget to download Boost, git to clone source code repo,
 # and make to automate program compilation with Makefile provided
 RUN apt-get update \
-  && apt-get install -y git \
+  && apt-get install -y build-essential \
+                        git \
                         g++ \
                         make \
                         cmake \
