@@ -39,6 +39,11 @@ typedef Imath_2_2::Vec2<Float>     Vec2;
 
 static int depth_max = 4;
 
+static Vec3 O = Vec3(0,0.35-1);
+static int w = 640;
+static int h = 480;
+static float filterwidth = 6.0;
+
 typedef struct PixelSample {
   int o, w, i, j; 
   Vec3 t;
@@ -66,74 +71,6 @@ typedef struct ShadeJob {
   {};
 } ShadeJob;
 
-struct TangentFrame {
-    // build frame from unit normal
-    TangentFrame(const Vec3& n) : w(n) {
-        u = (fabsf(w.x) >.01f ? Vec3(w.z, 0, -w.x) :
-                                Vec3(0, -w.z, w.y)).normalize();
-        v = w.cross(u);
-    }
-
-    // build frame from unit normal and unit tangent
-    TangentFrame(const Vec3& n, const Vec3& t) : w(n) {
-        v = w.cross(t);
-        u = v.cross(w);
-    }
-
-    // transform vector
-    Vec3 get(float x, float y, float z) const {
-        return x * u + y * v + z * w;
-    }
-
-    // untransform vector
-    float getx(const Vec3& a) const { return a.dot(u); }
-    float gety(const Vec3& a) const { return a.dot(v); }
-    float getz(const Vec3& a) const { return a.dot(w); }
-
-    Vec3 tolocal(const Vec3 &a) const {
-      return Vec3(a.dot(u), a.dot(v), a.dot(w));
-    }
-    Vec3 toworld(const Vec3 &a) const {
-      return get(a.x, a.y, a.z);
-    }
-
-private:
-    Vec3 u, v, w;
-};
-
-
-struct Sampling {
-    /// Warp the unit disk onto the unit sphere
-    /// http://psgraphics.blogspot.com/2011/01/improved-code-for-concentric-map.html
-    static void to_unit_disk(float& x, float& y) {
-        const float PI_OVER_4 = float(M_PI_4);
-        const float PI_OVER_2 = float(M_PI_2);
-        float phi, r;
-        float a = 2 * x - 1;
-        float b = 2 * y - 1;
-        if (a * a > b * b) { // use squares instead of absolute values
-            r = a;
-            phi = PI_OVER_4 * (b / a);
-        } else if (b != 0) { // b is largest
-            r = b;
-            phi = PI_OVER_2 - PI_OVER_4 * (a / b);
-        } else { // a == b == 0
-            r = 0;
-            phi = 0;
-        }
-        OIIO::fast_sincos(phi, &x, &y);
-        x *= r;
-        y *= r;
-    }
-
-    static void sample_cosine_hemisphere(const Vec3& N, float rndx, float rndy, Vec3& out, float& pdf) {
-        to_unit_disk(rndx, rndy);
-        float cos_theta = sqrtf(std::max(1 - rndx * rndx - rndy * rndy, 0.0f));
-        TangentFrame f(N);
-        out = f.get(rndx, rndy, cos_theta);
-        pdf = cos_theta * float(M_1_PI);
-    }
-};
 
 concurrent_queue<ShadeJob> shadeworkqueue;
 

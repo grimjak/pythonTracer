@@ -172,7 +172,7 @@ shade_threads = 1
 occlusion_threads = 1
 depth_max = 4  # Maximum number of light reflections.
 samples = 16
-filterwidth = 2.0
+filterwidth = 6.0
 smp = Sampler(w*h*samples)
 
 t = Thread(target = render_scene)
