@@ -4,8 +4,10 @@ FROM ubuntu:xenial as builder
 
 # Get g++ for compiling, wget to download Boost, git to clone source code repo,
 # and make to automate program compilation with Makefile provided
+ 
 RUN apt-get update \
   && apt-get install -y build-essential \
+                        pkg-config \
                         git \
                         g++ \
                         make \
@@ -13,7 +15,6 @@ RUN apt-get update \
                         openssl \
                         libssl-dev \
                         libblkid-dev e2fslibs-dev libboost-all-dev libaudit-dev \
-                        wget \
                         libtbb-dev \
                         cmake-curses-gui \
                         freeglut3-dev \
@@ -45,8 +46,20 @@ WORKDIR /app
 RUN \
   git clone https://github.com/embree/embree.git
 
+RUN apt-get update && apt-get install -y \
+            xz-utils \
+            build-essential \
+            curl \
+            && rm -rf /var/lib/apt/lists/* \
+            && curl -SL http://releases.llvm.org/6.0.0/clang+llvm-6.0.0-x86_64-linux-gnu-ubuntu-16.04.tar.xz \
+            | tar -xJC . && \
+            mv clang+llvm-6.0.0-x86_64-linux-gnu-ubuntu-16.04 /app/clang_6.0.0 && \
+            echo 'export PATH=/app/clang_6.0.0/bin:$PATH' >> ~/.bashrc && \
+            echo 'export LD_LIBRARY_PATH=/app/clang_6.0.0/lib:LD_LIBRARY_PATH' >> ~/.bashrc
+
+
 RUN \
-  cd embree && mkdir build && cd build && cmake -DEMBREE_ISPC_SUPPORT=OFF .. && make
+  export PATH=/app/clang_6.0.0/bin:$PATH && cd embree && mkdir build && cd build && cmake -DEMBREE_ISPC_SUPPORT=OFF -DEMBREE_TUTORIALS=OFF -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang EMBREE_MAX_ISA=AVX .. && make
 
 RUN \
   mkdir tmp && \
