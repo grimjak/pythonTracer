@@ -34,7 +34,7 @@ using namespace tbb;
 RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
 
-const int numPhi = 120;
+const int numPhi = 12;
 const int numTheta = 2*numPhi;
 
 
@@ -132,7 +132,6 @@ unsigned int addGroundPlane (RTCBuildQuality quality, RTCScene scene_i)
 {
   /* create a triangulated plane with 2 triangles and 4 vertices */
   RTCGeometry geom = rtcNewGeometry (g_device, RTC_GEOMETRY_TYPE_TRIANGLE);
-  rtcSetGeometryBuildQuality(geom, quality);
 
   /* set vertices */
   Vertex* vertices = (Vertex*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_VERTEX,0,RTC_FORMAT_FLOAT3,sizeof(Vertex),4);
