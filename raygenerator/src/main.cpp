@@ -39,7 +39,7 @@ typedef Imath_2_2::Vec2<Float>     Vec2;
 
 static int depth_max = 4;
 
-static Vec3 O = Vec3(0,0.35-1);
+static Vec3 O = Vec3(0,0.35,-1);
 static int w = 640;
 static int h = 480;
 static float filterwidth = 6.0;
@@ -48,7 +48,7 @@ typedef struct PixelSample {
   int o, w, i, j; 
   Vec3 t;
   PixelSample(){};
-  PixelSample(int offset, weight, ii, jj, Vec3 throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
+  PixelSample(int offset, int weight, int ii,int jj, Vec3 throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
   //void Serialize(Writer &writer)
   //{
 
@@ -77,7 +77,7 @@ concurrent_queue<ShadeJob> shadeworkqueue;
 //generate a single sample for a given set of coordinates
 //x and y in NDC, 0 to 1
 //need to define O
-TRay void generateSample(float x, y)
+TRay generateSample(float x, float y)
 {
   Vec3 Q = Vec3(x,y,0);
   Vec3 D = (Q-O).normalize();
@@ -109,8 +109,9 @@ void iterate(int &index, int iteration)
       float y = j / h - 0.5; //wrong, need to take into account aspect ratio
 
       TRay r = generateSample(x,y);
-      int o = 0; //needs to be a random offset
-      PixelSample ps = PixelSample(o,iteration,i,j,Vec3(1,1,1));
+      int o = rand()%(256);
+
+      PixelSample ps = PixelSample(o,iteration+1,i,j,Vec3(1,1,1));
 
       StringBuffer s;
       Writer<StringBuffer> writer(s);
@@ -134,20 +135,21 @@ void iterate(int &index, int iteration)
       writer.Key("ray");
       writer.StartObject();
       writer.Key("pdf");
-      writer.Double(tray.pdf);
+      writer.Double(1.0);
       writer.Key("depth");
-      writer.Int(tray.depth);
+      writer.Int(0);
       writer.Key("o");
       writer.StartArray();
-      writer.Double(rayToLight.o.x);writer.Double(rayToLight.o.y);writer.Double(rayToLight.o.z);
+      writer.Double(r.o.x);writer.Double(r.o.y);writer.Double(r.o.z);
       writer.EndArray();
       writer.Key("d");
       writer.StartArray();
-      writer.Double(rayToLight.d.x);writer.Double(rayToLight.d.y);writer.Double(rayToLight.d.z);
+      writer.Double(r.d.x);writer.Double(r.d.y);writer.Double(r.d.z);
       writer.EndArray();
       writer.EndObject();
+      writer.EndObject();
 
-      ex->Publish(s.GetString(),occlusionqueue);
+      ex->Publish(s.GetString(),rayqueue);
 
     }
   }
@@ -211,14 +213,24 @@ int main(int argc, char *argv[])
 
   //added delay for rabbit mq start to avoid failing with socket error
   std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-    
+
+  /*  
   //thread for tracing rays
   const int numthreads = 1;
   std::thread shadeworkthreads[numthreads];
   //launch threads
 
   for(int i=0;i<numthreads;++i) shadeworkthreads[i] = std::thread(shadeworker,i);
-  
+  */
+
+  //for now just start generating rays
+  int index = 0;
+  int samples = 1;
+  for(int s = 0; s < samples; s++)
+  {
+    iterate(index,s);
+  }
+  cerr << "index = " << index << endl;
   try {
 		AMQP amqp(host);
     //add occlusion queue 
