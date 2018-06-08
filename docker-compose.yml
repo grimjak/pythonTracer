@@ -3,7 +3,7 @@ services:
   rabbitmq:
     image: rabbitmq:3-management
     ports:
-      - "8080:15672"
+      - "8082:15672"
   rendercontrol:
     build: .
     ports:
@@ -50,9 +50,18 @@ services:
     links:
       - rabbitmq
     command: python ./writer.py
+  raygenerator:
+    build:
+      context: ./raygenerator
+      dockerfile: Dockerfile
+    volumes:
+     - .:/usr/src//app
+    links:
+      - rabbitmq
+    command: ./result 
   visualizer:
     image: dockersamples/visualizer:stable
     ports:
-      - "8080:8080"
+      - "8080:8081"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
