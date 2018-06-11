@@ -37,11 +37,10 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
-static int depth_max = 4;
-
 static Vec3 O = Vec3(0,0.35,-1);
 static int w = 640;
 static int h = 480;
+static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
 
 typedef struct PixelSample {
@@ -81,7 +80,6 @@ TRay generateSample(float x, float y)
 {
   Vec3 Q = Vec3(x,y,0);
   Vec3 D = (Q-O).normalize();
-
   return TRay(O,D);
 }
 
@@ -105,9 +103,16 @@ void iterate(int &index, int iteration)
       float rx = sobol::sample(index++,0);
       float ry = sobol::sample(index,1);
 
-      float x = i / w - 0.5;
-      float y = j / h - 0.5; //wrong, need to take into account aspect ratio
+      float offsetu = filterwidth * rx - (filterwidth*0.5);
+      float offsetv = filterwidth * ry - (filterwidth*0.5);
 
+
+      float x = 2*((float)i / (float)w - 0.5);
+      float y =2*((float)j / (float)h - 0.5); //wrong, need to take into account aspect ratio
+      y/=r;
+
+      x += offsetu/w;
+      y += offsetv/w;
       TRay r = generateSample(x,y);
       int o = rand()%(256);
 
@@ -225,7 +230,7 @@ int main(int argc, char *argv[])
 
   //for now just start generating rays
   int index = 0;
-  int samples = 1;
+  int samples = 256;
   for(int s = 0; s < samples; s++)
   {
     iterate(index,s);
