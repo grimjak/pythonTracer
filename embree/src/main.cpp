@@ -34,7 +34,7 @@ using namespace tbb;
 RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
 
-const int numPhi = 12;
+const int numPhi = 64;
 const int numTheta = 2*numPhi;
 
 
