@@ -37,7 +37,7 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
-static int depth_max = 4;
+static int depth_max = 0;
 
 typedef struct PixelSample {
   int o, w, i, j; 

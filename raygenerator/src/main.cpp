@@ -24,6 +24,7 @@
 
 #include <OpenImageIO/fmath.h>
 
+#include <random>
 #include "sobol.h"
 
 using namespace std;
@@ -42,6 +43,7 @@ static int w = 640;
 static int h = 480;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
+
 
 typedef struct PixelSample {
   int o, w, i, j; 
@@ -86,7 +88,7 @@ TRay generateSample(float x, float y)
 //generate one iterations worth of samples
 //need to define w and h and filterwidth
 // iterate over pixels, need to keep track of index
-void iterate(int &index, int iteration)
+void iterate(int &index, int iteration,float *offsets)
 {
   std::string host ="rabbitmq";
   std::string rayqueue = "rayqueue";
@@ -95,20 +97,29 @@ void iterate(int &index, int iteration)
   AMQPExchange *ex = amqp.createExchange("ptex");
   ex->Declare("ptex","direct");
 
+  //need an offset per pixel
+
   for (int i = 0; i<w; i++)
   {
 
     for (int j = 0; j<h; j++)
     {
-      float rx = sobol::sample(index++,0);
-      float ry = sobol::sample(index,1);
+      cerr << i << "," << j << ":" << offsets[j*w+i] << endl;
+      cerr << j*w+i << endl;
+      float rx = sobol::sample(iteration,0);
+      float ry = sobol::sample(iteration,1);
+      float offset = offsets[j*w+i];
+      rx = (rx+offset);if (rx > 1) rx-=1;
+      ry = (ry+offset);if (ry > 1) ry-=1;
 
+
+      cerr << rx <<","<<ry << endl;
       float offsetu = filterwidth * rx - (filterwidth*0.5);
       float offsetv = filterwidth * ry - (filterwidth*0.5);
 
 
       float x = 2*((float)i / (float)w - 0.5);
-      float y =2*((float)j / (float)h - 0.5); //wrong, need to take into account aspect ratio
+      float y =2*((float)j / (float)h - 0.5); 
       y/=r;
 
       x += offsetu/w;
@@ -231,9 +242,18 @@ int main(int argc, char *argv[])
   //for now just start generating rays
   int index = 0;
   int samples = 256;
+  float offsets[w*h];
+
+  std::random_device rd;
+  std::mt19937 e2(rd());
+  std::uniform_real_distribution<> dist(0,1);
+
+  for(int i = 0; i < w*h; i++)
+    offsets[i] = dist(e2);
+    
   for(int s = 0; s < samples; s++)
   {
-    iterate(index,s);
+    iterate(index,s,&offsets[0]);
   }
   cerr << "index = " << index << endl;
   try {
