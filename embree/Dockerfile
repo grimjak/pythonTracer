@@ -80,5 +80,6 @@ ENV LD_LIBRARY_PATH=.
 COPY --from=builder /app/result ./result
 COPY --from=builder /app/embree/build/libembree3* ./
 COPY --from=builder /usr/lib/x86_64-linux-gnu/libtbb* ./
+
 #RUN apt-get update && apt-get install -y libtbb-dev
 CMD ["/app/result"]

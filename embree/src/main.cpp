@@ -24,6 +24,8 @@
 
 #include <tbb/concurrent_queue.h>
 
+#include "obj_loader.h"
+
 //using namespace AmqpClient;
 using namespace std;
 using namespace rapidjson;
@@ -67,6 +69,7 @@ typedef struct OcclusionJob {
 
 concurrent_queue<RayJob> rayworkqueue;
 concurrent_queue<OcclusionJob> occlusionworkqueue;
+
 
 /* adds a sphere to the scene */
 unsigned int createSphere (RTCBuildQuality quality, std::vector<float> pos, const float r)
@@ -334,6 +337,89 @@ void setup_scene()
     rtcCommitScene(g_scene);
 }
 
+void setup_obj_scene()
+{
+  tinyobj::attrib_t attrib;
+  std::vector<tinyobj::shape_t> shapes;
+  std::vector<tinyobj::material_t> materials;
+
+  std::string err;
+  bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, "/usr/src/app/cornel_box.obj",
+                              "/usr/src/app/", true);
+  if (!err.empty()) {
+    std::cerr << err << std::endl;
+  }
+
+  if (!ret) {
+    printf("Failed to load/parse .obj.\n");
+    return;
+  }
+
+  std::cout << "# of vertices  : " << (attrib.vertices.size() / 3) << std::endl;
+  std::cout << "# of normals   : " << (attrib.normals.size() / 3) << std::endl;
+  std::cout << "# of texcoords : " << (attrib.texcoords.size() / 2) << std::endl;
+
+  materials.push_back(tinyobj::material_t());
+
+  //create device
+  g_device = rtcNewDevice("");
+  g_scene = rtcNewScene(g_device);
+  rtcSetSceneFlags(g_scene,RTC_SCENE_FLAG_DYNAMIC | RTC_SCENE_FLAG_ROBUST);
+  rtcSetSceneBuildQuality(g_scene,RTC_BUILD_QUALITY_LOW);
+  //iterate over shapes
+  for (size_t s = 0; s < shapes.size(); s++) { 
+    //create geo
+    RTCGeometry geom = rtcNewGeometry(g_device,RTC_GEOMETRY_TYPE_TRIANGLE);
+    rtcSetGeometryBuildQuality(geom,RTC_BUILD_QUALITY_LOW);
+    
+    Vertex*   vertices  = (Vertex*  ) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_VERTEX,0,RTC_FORMAT_FLOAT3,sizeof(Vertex),attrib.vertices.size());
+    Triangle* triangles = (Triangle*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT3,sizeof(Triangle),shapes[s].mesh.indices.size()/3);
+
+
+    for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
+    {
+      tinyobj::index_t idx0 = shapes[s].mesh.indices[3 * f + 0];
+      tinyobj::index_t idx1 = shapes[s].mesh.indices[3 * f + 1];
+      tinyobj::index_t idx2 = shapes[s].mesh.indices[3 * f + 2];
+
+      triangles[f].v0 = idx0.vertex_index;
+      triangles[f].v1 = idx1.vertex_index;
+      triangles[f].v2 = idx2.vertex_index;
+
+      cerr << triangles[f].v0 << "," << triangles[f].v1 << "," << triangles[f].v2 << endl;
+      int current_material_id = shapes[s].mesh.material_ids[f];
+
+      if ((current_material_id < 0) ||
+          (current_material_id >= static_cast<int>(materials.size()))) 
+      {
+        // Invaid material ID. Use default material.
+        current_material_id = materials.size() - 1;  // Default material is added to the last item in `materials`.
+      }
+    }
+    for (size_t v = 0; v < attrib.vertices.size()/3;v++)
+    {
+      vertices[v].x = attrib.vertices[v*3];
+      vertices[v].y = attrib.vertices[v*3+1];
+      vertices[v].z = attrib.vertices[v*3+2];
+      cerr << vertices[v].x << "," << vertices[v].y << "," << vertices[v].z << endl;
+
+    }
+
+    for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
+    {
+      
+      cerr<<vertices[triangles[f].v0].x<<","<<vertices[triangles[f].v0].y<<","<<vertices[triangles[f].v0].z<<endl;
+      cerr<<vertices[triangles[f].v1].x<<","<<vertices[triangles[f].v1].y<<","<<vertices[triangles[f].v1].z<<endl;
+      cerr<<vertices[triangles[f].v2].x<<","<<vertices[triangles[f].v2].y<<","<<vertices[triangles[f].v2].z<<endl;
+    }
+
+    rtcCommitGeometry(geom);
+    unsigned int geomID = rtcAttachGeometry(g_scene,geom);
+    rtcReleaseGeometry(geom);
+  } 
+  rtcCommitScene(g_scene);                          
+}
+
 
 int onCancel(AMQPMessage * message ) {
 	cout << "cancel tag="<< message->getDeliveryTag() << endl;
@@ -350,7 +436,7 @@ int  rayMessageHandler( AMQPMessage * message  )
     try
     {
       ParseResult result = document.Parse(data);
-      std::cerr << data << endl; 
+      //std::cerr << data << endl; 
       if (!result) {
         std::cerr << "Ray message handler: JSON parse error: " << GetParseError_En(result.Code()) << result.Offset() << endl;
         std::cerr << data << endl; 
@@ -456,10 +542,10 @@ int main(int argc, char *argv[])
   //added delay for rabbit mq start to avoid failing with socket error
   std::this_thread::sleep_for(std::chrono::milliseconds(10000));
     
-  setup_scene();
-
+  //setup_scene();
+  setup_obj_scene();
   //thread for tracing rays
-  const int numthreads = 2;
+  const int numthreads = 1;
   std::thread rayworkthreads[numthreads];
   //launch threads
   if (occlusion)
