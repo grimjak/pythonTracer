@@ -27,7 +27,7 @@
 #include <random>
 #include "sobol.h"
 
-#define FILTER_TABLE_SIZE 8
+#define FILTER_TABLE_SIZE 1024
 
 using namespace std;
 using namespace rapidjson;
@@ -40,7 +40,9 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
-static Vec3 O = Vec3(0,0.35,-1);
+static Vec3 O = Vec3(0,220,-220);
+//static Vec3 O = Vec3(0,0.35,-1);
+
 static int w = 640;
 static int h = 480;
 static float r = (float)w/(float)h;
@@ -181,7 +183,7 @@ TRay generateSample(float x, float y)
 //generate one iterations worth of samples
 //need to define w and h and filterwidth
 // iterate over pixels, need to keep track of index
-void iterate(int &index, int iteration,float *offsets)
+void iterate(int &index, int iteration,float *offsets, vector<float> *filter_table)
 {
   std::string host ="rabbitmq";
   std::string rayqueue = "rayqueue";
@@ -197,26 +199,21 @@ void iterate(int &index, int iteration,float *offsets)
 
     for (int j = 0; j<h; j++)
     {
-      cerr << i << "," << j << ":" << offsets[j*w+i] << endl;
-      cerr << j*w+i << endl;
-      float rx = sobol::sample(iteration,0);
-      float ry = sobol::sample(iteration,1);
+      float rx = sobol::sample(++index,1);
+      float ry = sobol::sample(index,2);
       float offset = offsets[j*w+i];
       rx = (rx+offset);if (rx > 1) rx-=1;
       ry = (ry+offset);if (ry > 1) ry-=1;
 
-
-      cerr << rx <<","<<ry << endl;
-      float offsetu = filterwidth * rx - (filterwidth*0.5);
-      float offsetv = filterwidth * ry - (filterwidth*0.5);
-
+      rx = (*filter_table)[int(rx*FILTER_TABLE_SIZE-1)];
+      ry = (*filter_table)[int(ry*FILTER_TABLE_SIZE-1)];
 
       float x = 2*((float)i / (float)w - 0.5);
       float y =2*((float)j / (float)h - 0.5); 
       y/=r;
 
-      x += offsetu/w;
-      y += offsetv/w;
+      x += rx/w;
+      y += ry/w;
       TRay r = generateSample(x,y);
       int o = rand()%(256);
 
@@ -355,7 +352,7 @@ int main(int argc, char *argv[])
     
   for(int s = 0; s < samples; s++)
   {
-    iterate(index,s,&offsets[0]);
+    iterate(index,s,&offsets[0],&filter_table);
   }
   cerr << "index = " << index << endl;
   try {

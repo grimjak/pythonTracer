@@ -37,7 +37,7 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
-static int depth_max = 0;
+static int depth_max = 4;
 
 typedef struct PixelSample {
   int o, w, i, j; 
@@ -228,7 +228,6 @@ void shadeworker(int tid)
 
         Vec3 t = Vec3(ps.t.x,ps.t.y,ps.t.z);
         t *= Cs * tray.pdf;
-        cerr<<"t= "<<t<<endl;
         TRay ray(P+N*0.0001,out_dir.normalize());
         ray.depth = tray.depth+1;
         ray.pdf = pdf;
