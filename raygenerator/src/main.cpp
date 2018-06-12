@@ -27,6 +27,8 @@
 #include <random>
 #include "sobol.h"
 
+#define FILTER_TABLE_SIZE 8
+
 using namespace std;
 using namespace rapidjson;
 using namespace tbb;
@@ -74,6 +76,97 @@ typedef struct ShadeJob {
 
 
 concurrent_queue<ShadeJob> shadeworkqueue;
+
+static float filter_func_gaussian(float v, float width)
+{
+  v *= 6.0f/width;
+  return expf(-2.0f*v*v);
+}
+
+void util_cdf_evaluate(const int resolution,
+                       const float from,
+                       const float to,
+                       const float width,
+                       vector<float> &cdf)
+{
+	const int cdf_count = resolution + 1;
+	const float range = to - from;
+	cdf.resize(cdf_count);
+	cdf[0] = 0.0f;
+	/* Actual CDF evaluation. */
+	for(int i = 0; i < resolution; ++i) {
+		float x = from + range * (float)i / (resolution - 1);
+		float y = filter_func_gaussian(x,width);
+		cdf[i + 1] = cdf[i] + fabsf(y);
+	}
+	/* Normalize the CDF. */
+	for(int i = 0; i <= resolution; i++) {
+		cdf[i] /= cdf[resolution];
+	}
+}
+
+/* Invert pre-calculated CDF function. */
+void util_cdf_invert(const int resolution,
+                     const float from,
+                     const float to,
+                     const vector<float> &cdf,
+                     const bool make_symmetric,
+                     vector<float> &inv_cdf)
+{
+  const float inv_resolution = 1.0f / (float)resolution;
+  const float range = to - from;
+  inv_cdf.resize(resolution);
+  if(make_symmetric) {
+    const int half_size = (resolution - 1) / 2;
+    for(int i = 0; i <= half_size; i++) {
+      float x = i / (float)half_size;
+      int index = upper_bound(cdf.begin(), cdf.end(), x) - cdf.begin();
+      float t;
+      if(index < cdf.size() - 1) {
+        t = (x - cdf[index])/(cdf[index+1] - cdf[index]);
+      } else {
+        t = 0.0f;
+        index = cdf.size() - 1;
+      }
+      float y = ((index + t) / (resolution - 1)) * (2.0f * range);
+      inv_cdf[half_size+i] = 0.5f*(1.0f + y);
+      inv_cdf[half_size-i] = 0.5f*(1.0f - y);
+    }
+  }
+  else {
+    for(int i = 0; i < resolution; i++) {
+      float x = from + range * (float)i * inv_resolution;
+      int index = upper_bound(cdf.begin(), cdf.end(), x) - cdf.begin();
+      float t;
+      if(index < cdf.size() - 1) {
+        t = (x - cdf[index])/(cdf[index+1] - cdf[index]);
+      } else {
+        t = 0.0f;
+        index = resolution;
+      }
+      inv_cdf[i] = (index + t) * inv_resolution;
+    }
+  }
+}
+
+/* Evaluate inverted CDF of a given functor with given range and resolution. */
+void util_cdf_inverted(const int resolution,
+                       const float from,
+                       const float to,
+                       const bool make_symmetric,
+                       const float width,
+                       vector<float> &inv_cdf)
+{
+	vector<float> cdf;
+	/* There is no much smartness going around lower resolution for the CDF table,
+	 * this just to match the old code from pixel filter so it all stays exactly
+	 * the same and no regression tests are failed.
+	 */
+	util_cdf_evaluate(resolution - 1, from, to, width, cdf);
+	util_cdf_invert(resolution, from, to, cdf, make_symmetric, inv_cdf);
+}
+
+
 
 //generate a single sample for a given set of coordinates
 //x and y in NDC, 0 to 1
@@ -243,6 +336,15 @@ int main(int argc, char *argv[])
   int index = 0;
   int samples = 256;
   float offsets[w*h];
+
+  int width = 6;
+  vector<float> filter_table(FILTER_TABLE_SIZE);
+  util_cdf_inverted(FILTER_TABLE_SIZE,
+                    0.0f,
+                    width * 0.5f,
+                    true,
+                    width,
+                    filter_table);
 
   std::random_device rd;
   std::mt19937 e2(rd());
