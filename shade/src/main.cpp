@@ -37,7 +37,7 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
-static int depth_max = 4;
+static int depth_max = 0;
 
 typedef struct PixelSample {
   int o, w, i, j; 
@@ -160,18 +160,31 @@ void shadeworker(int tid)
       {
         ps = rj.ps;
         P = rj.P;
-        N = rj.N;
+        N = rj.N.normalize();
         tray = rj.tray;
         Vec3 wi = Vec3(tray.d.x,tray.d.y,tray.d.z);
         Vec3 Cs = Vec3(1,1,1);
         
         //do shading
         //direct lighting
-        Vec3 L = Vec3(5,5,-10);
-        Vec3 color_light(1,1,1);
-        TRay rayToLight(P+N*0.0001,(L-P).normalize());
+        //Vec3 L = Vec3(5,5,-10);
+        Vec3 L = Vec3(100,540,400);
+       // Vec3 color_light(20,20,20);
+                Vec3 color_light(1,1,1);
+
+        //TRay rayToLight(P+N*0.0001,(L-P).normalize());
+        Vec3 lightVec = (L-P);
+        float len = lightVec.length();
+        //TRay rayToLight(P+N*0.0001,lightVec.normalize());
+        TRay rayToLight(P,lightVec.normalize());
+
+        //TRay rayToLight(P+N*0.0001,Vec3(0,1,0));
+
         //calculate radiance here and pass it to be added if ray hits?
         Vec3 rad = ps.t * color_light * Cs * N.dot(rayToLight.d) * M_1_PI; //separate PDF
+       // Vec3 rad = ps.t * color_light * Cs; //separate PDF
+
+        rad = Vec3(0.5,1,0.5);
 
         StringBuffer s;
         Writer<StringBuffer> writer(s);
@@ -208,6 +221,8 @@ void shadeworker(int tid)
         writer.EndArray();
         writer.EndObject();
 
+        writer.Key("len");
+        writer.Double(len);
         writer.Key("rad");
         writer.StartArray();
         writer.Double(rad.x);writer.Double(rad.y);writer.Double(rad.z);

@@ -42,7 +42,7 @@ const int numTheta = 2*numPhi;
 
 /* vertex and triangle layout */
 struct Vertex   { float x,y,z,r;  }; // FIXME: rename to Vertex4f
-struct Triangle { int v0, v1, v2; };
+struct Triangle { int materialid, v0, v1, v2; };
 
 //struct Vec3f {float x,y,z; };
 typedef struct PixelSample { int o, w, i, j; Vec3fa t;} PixelSample;
@@ -109,6 +109,7 @@ unsigned int createSphere (RTCBuildQuality quality, std::vector<float> pos, cons
       int p11 = phi*numTheta+theta%numTheta;
 
       if (phi > 1) {
+        triangles[tri].materialid = 0;
         triangles[tri].v0 = p10;
         triangles[tri].v1 = p01;
         triangles[tri].v2 = p00;
@@ -116,6 +117,7 @@ unsigned int createSphere (RTCBuildQuality quality, std::vector<float> pos, cons
       }
 
       if (phi < numPhi) {
+        triangles[tri].materialid = 0;
         triangles[tri].v0 = p11;
         triangles[tri].v1 = p01;
         triangles[tri].v2 = p10;
@@ -145,8 +147,9 @@ unsigned int addGroundPlane (RTCBuildQuality quality, RTCScene scene_i)
 
   /* set triangles */
   Triangle* triangles = (Triangle*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT3,sizeof(Triangle),2);
-  triangles[0].v0 = 0; triangles[0].v1 = 1; triangles[0].v2 = 2;
-  triangles[1].v0 = 1; triangles[1].v1 = 3; triangles[1].v2 = 2;
+  
+  triangles[0].materialid = 0; triangles[0].v0 = 0; triangles[0].v1 = 1; triangles[0].v2 = 2;
+  triangles[1].materialid = 0; triangles[1].v0 = 1; triangles[1].v1 = 3; triangles[1].v2 = 2;
 
   rtcCommitGeometry(geom);
   unsigned int geomID = rtcAttachGeometry(scene_i,geom);
@@ -279,9 +282,13 @@ void occlusionworker(int tid)
         /*intersect ray with scene*/
         RTCIntersectContext context;
         rtcInitIntersectContext(&context);
-        rtcOccluded1(g_scene,&context,RTCRay_(ray));
+        //rtcOccluded1(g_scene,&context,RTCRay_(ray));
+        rtcIntersect1(g_scene,&context,RTCRayHit_(ray));
 
-        if (ray.tfar >= 0.0f)
+
+        //if (ray.tfar >= 0.0001f)
+        if (ray.geomID == RTC_INVALID_GEOMETRY_ID)
+       // if(true)
         {
           try
           {
@@ -314,6 +321,34 @@ void occlusionworker(int tid)
           } catch (const std::exception& e) {
             cerr << "problem with message: " << endl;
           }
+        }
+        else {
+          StringBuffer s;
+            Writer<StringBuffer> writer(s);
+            writer.StartObject();
+            writer.Key("ps");
+            writer.StartObject();
+            writer.Key("i");
+            writer.Int(ps.i);
+            writer.Key("j");
+            writer.Int(ps.j);
+            writer.Key("o");
+            writer.Int(ps.o);
+            writer.Key("w");
+            writer.Int(ps.w);
+            writer.Key("t");
+            writer.StartArray();
+            writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
+            writer.EndArray();
+            writer.EndObject();
+
+            writer.Key("rgb");
+            writer.StartArray();
+            writer.Double(1.0);writer.Double(0.0);writer.Double(0.0);
+            writer.EndArray();
+            writer.EndObject();
+
+            ex->Publish(s.GetString(),radiancequeue);
         }
       }
     }
@@ -382,11 +417,6 @@ void setup_obj_scene()
       tinyobj::index_t idx1 = shapes[s].mesh.indices[3 * f + 1];
       tinyobj::index_t idx2 = shapes[s].mesh.indices[3 * f + 2];
 
-      triangles[f].v0 = idx0.vertex_index;
-      triangles[f].v1 = idx1.vertex_index;
-      triangles[f].v2 = idx2.vertex_index;
-
-      cerr << triangles[f].v0 << "," << triangles[f].v1 << "," << triangles[f].v2 << endl;
       int current_material_id = shapes[s].mesh.material_ids[f];
 
       if ((current_material_id < 0) ||
@@ -395,6 +425,14 @@ void setup_obj_scene()
         // Invaid material ID. Use default material.
         current_material_id = materials.size() - 1;  // Default material is added to the last item in `materials`.
       }
+
+      triangles[f].materialid = current_material_id;
+      triangles[f].v0 = idx0.vertex_index;
+      triangles[f].v1 = idx1.vertex_index;
+      triangles[f].v2 = idx2.vertex_index;
+
+      cerr << triangles[f].v0 << "," << triangles[f].v1 << "," << triangles[f].v2 << endl;
+      
     }
     for (size_t v = 0; v < attrib.vertices.size()/3;v++)
     {
@@ -511,7 +549,8 @@ int  occlusionMessageHandler( AMQPMessage * message  )
     Vec3fa rad;
     rad.x = document["rad"][0].GetFloat(); rad.y = document["rad"][1].GetFloat(); rad.z = document["rad"][2].GetFloat();
 
-    Ray ray(Vec3fa(tray.o),Vec3fa(tray.d),0.001,inf);
+    float len = document["len"].GetFloat();
+    Ray ray(Vec3fa(tray.o),Vec3fa(tray.d),0.0001,len);
 
     occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
     } catch (const std::exception& e) {
