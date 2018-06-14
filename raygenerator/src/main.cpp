@@ -40,13 +40,14 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
-static Vec3 O = Vec3(0,220,-220);
+static Vec3 O = Vec3(274,274,-440);
 //static Vec3 O = Vec3(0,0.35,-1);
 
 static int w = 640;
 static int h = 480;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
+static int samples = 1;
 
 
 typedef struct PixelSample {
@@ -169,13 +170,12 @@ void util_cdf_inverted(const int resolution,
 }
 
 
-
 //generate a single sample for a given set of coordinates
 //x and y in NDC, 0 to 1
 //need to define O
 TRay generateSample(float x, float y)
 {
-  Vec3 Q = Vec3(x,y,0);
+  Vec3 Q = Vec3(O.x+x,O.y+y,O.z+1);
   Vec3 D = (Q-O).normalize();
   return TRay(O,D);
 }
@@ -331,7 +331,6 @@ int main(int argc, char *argv[])
 
   //for now just start generating rays
   int index = 0;
-  int samples = 256;
   float offsets[w*h];
 
   int width = 6;

@@ -5,7 +5,6 @@ services:
     ports:
       - "8082:15672"
   rendercontrol:
-    image: rendercontrol:latest
     build: 
       context: .
       dockerfile: Dockerfile
@@ -15,55 +14,50 @@ services:
      - FLASK_DEBUG=1
      - FLASK_APP=main.py
     volumes:
-     - ".:/usr/src//app"
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: python ./main.py control
   rayserver:
-    image: rayserver:latest
     build:
       context: ./embree
       dockerfile: Dockerfile
     volumes:
-     - ".:/usr/src//app"
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: ./result rays
   occlusionserver:
-    image: occlusionserver:latest
     build:
       context: ./embree
       dockerfile: Dockerfile
     volumes:
-     - ".:/usr/src//app"
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: ./result occlusion
   shadeserver:
-    image: shadeserver:latest  
     build:
       context: ./shade
       dockerfile: Dockerfile
     volumes:
-     - ".:/usr/src//app"
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: ./result   
   renderwriter:
-    image: renderwriter:latest  
     build: .
     volumes:
-     - ".:/usr/src//app"
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: python ./writer.py
   raygenerator:
-    image: raygenerator:latest  
     build:
       context: ./raygenerator
       dockerfile: Dockerfile
     volumes:
-     - ".:/usr/src//app"
+     - .:/usr/src//app
     links:
       - rabbitmq
     command: ./result 

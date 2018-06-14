@@ -121,6 +121,7 @@ def setup_writer():
             rgb = np.array(radiancecontext['rgb'])
             weights[h-ps.j-1,ps.i] = ps.w
             img[h-ps.j-1,ps.i] += rgb #need to add this to another queue that can then write to disk?
+            img[h-ps.j-1,ps.i]+=np.array([0.1,0.1,0.1])
             if count > 1000:
                 break
         print("received 100 radiance updates, writing")
