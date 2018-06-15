@@ -30,7 +30,7 @@ services:
       - rabbitmq
     command: ./result rays
   occlusionserver:
-    image: occlusionserver:latest
+    image: rayserver:latest
     build:
       context: ./embree
       dockerfile: Dockerfile
