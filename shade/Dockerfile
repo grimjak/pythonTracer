@@ -37,7 +37,14 @@ RUN \
   make && \
   cp libamqpcpp.a /usr/local/lib
 
-
+RUN \
+  rm -rf msgpack-c && \
+  git clone https://github.com/msgpack/msgpack-c.git && \
+  cd msgpack-c && \
+  cmake -DMSGPACK_CXX11=ON . && \
+  make install && \
+  cd / && rm -rf msgpack-c
+  
 USER root
 WORKDIR /app
 

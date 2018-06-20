@@ -15,6 +15,9 @@
 #include "rapidjson/writer.h"
 #include "rapidjson/stringbuffer.h"
 
+#include <msgpack.hpp>
+
+
 #include <tbb/concurrent_queue.h>
 
 #include <OpenEXR/ImathVec.h>
@@ -37,30 +40,141 @@ typedef Imath_2_2::Matrix44<Float> Matrix44;
 typedef Imath_2_2::Color3<Float>   Color3;
 typedef Imath_2_2::Vec2<Float>     Vec2;
 
-static int depth_max = 0;
+static int depth_max = 10;
 
 typedef struct PixelSample {
   int o, w, i, j; 
   Vec3 t;
-  //void Serialize(Writer &writer)
-  //{
+  PixelSample(){};
+  PixelSample(int offset, int weight, int ii,int jj, Vec3 throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
+} PixelSample;
 
-  //}
-  } PixelSample;
 typedef struct TRay {float pdf; 
                     int depth; 
                     Vec3 o, d;
                     TRay(){};
-                    TRay(Vec3 origin, Vec3 direction):o(origin),d(direction){};
+                    TRay(Vec3 origin, Vec3 direction):pdf(1.0),depth(0),o(origin),d(direction){};
+                    TRay(float p, int d, Vec3 origin, Vec3 direction):pdf(p),depth(d),o(origin),d(direction){};
+
 } TRay;
+
+// Routines to convert to and from messagepacks
+// User defined class template specialization
+namespace msgpack {
+MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS) {
+namespace adaptor {
+
+template<>
+struct convert<PixelSample> {
+    msgpack::object const& operator()(msgpack::object const& o, PixelSample& v) const {
+        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
+        if (o.via.array.size != 7) throw msgpack::type_error();
+        v = PixelSample(
+            o.via.array.ptr[0].as<int>(),
+            o.via.array.ptr[1].as<int>(),
+            o.via.array.ptr[2].as<int>(),
+            o.via.array.ptr[3].as<int>(),
+            Vec3(
+              o.via.array.ptr[4].as<float>(),
+              o.via.array.ptr[5].as<float>(),
+              o.via.array.ptr[6].as<float>()           
+            )
+            );
+
+        return o;
+    }
+};
+
+template<>
+struct pack<PixelSample> {
+    template <typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& o, PixelSample const& v) const {
+        // packing member variables as an array.
+        o.pack_array(7);
+        o.pack(v.o);o.pack(v.w);o.pack(v.i);o.pack(v.j);
+        o.pack(v.t.x);o.pack(v.t.y);o.pack(v.t.z);
+        return o;
+    }
+};
+
+template<>
+struct convert<TRay> {
+    msgpack::object const& operator()(msgpack::object const& o, TRay& v) const {
+        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
+        if (o.via.array.size != 8) throw msgpack::type_error();
+        v = TRay(
+            o.via.array.ptr[0].as<float>(),
+            o.via.array.ptr[1].as<int>(),
+            Vec3(
+              o.via.array.ptr[2].as<float>(),
+              o.via.array.ptr[3].as<float>(),
+              o.via.array.ptr[4].as<float>()           
+            ),
+            Vec3(
+              o.via.array.ptr[5].as<float>(),
+              o.via.array.ptr[6].as<float>(),
+              o.via.array.ptr[7].as<float>()           
+            )
+            );
+
+        return o;
+    }
+};
+
+template<>
+struct pack<TRay> {
+    template <typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& o, TRay const& v) const {
+        // packing member variables as an array.
+        o.pack_array(8);
+        o.pack(v.pdf);o.pack(v.depth);
+        o.pack(v.o.x);o.pack(v.o.y);o.pack(v.o.z);
+        o.pack(v.d.x);o.pack(v.d.y);o.pack(v.d.z);
+
+        return o;
+    }
+};
+
+template<>
+struct convert<Vec3> {
+    msgpack::object const& operator()(msgpack::object const& o, Vec3& v) const {
+        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
+        if (o.via.array.size != 3) throw msgpack::type_error();
+        v = Vec3(
+              o.via.array.ptr[0].as<float>(),
+              o.via.array.ptr[1].as<float>(),
+              o.via.array.ptr[2].as<float>()           
+            );
+
+        return o;
+    }
+};
+
+template<>
+struct pack<Vec3> {
+    template <typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& o, Vec3 const& v) const {
+        // packing member variables as an array.
+        o.pack_array(3);
+        o.pack(v.x);o.pack(v.y);o.pack(v.z);
+
+        return o;
+    }
+};
+
+}
+}
+}
+
 
 typedef struct ShadeJob {
   PixelSample ps; 
   Vec3 P;
   Vec3 N;
   TRay tray;
+  unsigned int materialid;
   ShadeJob(){};
-  ShadeJob(PixelSample p,Vec3 pp,Vec3 nn,TRay t):ps(p),P(pp),N(nn),tray(t)
+  ShadeJob(PixelSample p,Vec3 pp,Vec3 nn,TRay t,unsigned int mid):ps(p),P(pp),N(nn),tray(t),materialid(mid)
   {};
 } ShadeJob;
 
@@ -162,21 +276,40 @@ void shadeworker(int tid)
         P = rj.P;
         N = rj.N.normalize();
         tray = rj.tray;
+
+        if (tray.depth >= depth_max) continue;
+
+        unsigned int materialid = rj.materialid;
         Vec3 wi = Vec3(tray.d.x,tray.d.y,tray.d.z);
         Vec3 Cs = Vec3(1,1,1);
+        switch(materialid)
+        {
+          case 1: Cs = Vec3(1,0,0); break;
+          case 2: Cs = Vec3(0,1,0); break;
+          case 3: Cs = Vec3(0,0,1); break;
+          case 4: Cs = Vec3(1,1,1); break;
+
+        }
         
         //do shading
         //direct lighting
         //Vec3 L = Vec3(5,5,-10);
-        Vec3 L = Vec3(100,540,400);
-       // Vec3 color_light(20,20,20);
-                Vec3 color_light(1,1,1);
+       // Vec3 L = Vec3(100,540,400);
+       //random point on square
+        index++;
+        float lx = sobol::sample(index+ps.o,0);
+        float ly = sobol::sample(index+ps.o,1);
+        Vec3 L = Vec3(213+(lx*((343-213)/2)),548,227+(ly*((332-227)/2)));
+        std::cerr << L << endl;
+       // Vec3 L = Vec3(235,540,235);
+        Vec3 color_light(1.5,1.5,1.5);
+        //        Vec3 color_light(1,1,1);
 
         //TRay rayToLight(P+N*0.0001,(L-P).normalize());
         Vec3 lightVec = (L-P);
         float len = lightVec.length();
         //TRay rayToLight(P+N*0.0001,lightVec.normalize());
-        TRay rayToLight(P,lightVec.normalize());
+        TRay rayToLight(P+N*0.0001,lightVec.normalize());
 
         //TRay rayToLight(P+N*0.0001,Vec3(0,1,0));
 
@@ -184,7 +317,7 @@ void shadeworker(int tid)
         Vec3 rad = ps.t * color_light * Cs * N.dot(rayToLight.d) * M_1_PI; //separate PDF
        // Vec3 rad = ps.t * color_light * Cs; //separate PDF
 
-        rad = Vec3(0.5,1,0.5);
+        //rad = N;
 
         StringBuffer s;
         Writer<StringBuffer> writer(s);
@@ -231,6 +364,7 @@ void shadeworker(int tid)
 
         ex->Publish(s.GetString(),occlusionqueue);
 
+        
         //indirect ray
        // Vec3 wi = tray.d;
         float pdf = 1;
@@ -243,12 +377,18 @@ void shadeworker(int tid)
 
         Vec3 t = Vec3(ps.t.x,ps.t.y,ps.t.z);
         t *= Cs * tray.pdf;
+
+        //russian roulette
+        float p = std::max(t.x,std::max(t.y,t.z));
+        index++;
+        if(p < sobol::sample(index,0)) continue;
+
+        t *= 1/p;
+
         TRay ray(P+N*0.0001,out_dir.normalize());
         ray.depth = tray.depth+1;
         ray.pdf = pdf;
        // ray.pdf = std::max(N.normalize().dot(out_dir.normalize()), 0.000000f) * M_1_PI;
-
-        if (ray.depth > depth_max) continue;
 
         StringBuffer s2;
         writer.Reset(s2);
@@ -305,6 +445,35 @@ int  shadeMessageHandler( AMQPMessage * message  )
 	char * data = message->getMessage(&j);
 	if (data)
   {
+    msgpack::unpacker pac;
+    pac.reserve_buffer(j);
+    memcpy(pac.buffer(), data, j);
+    pac.buffer_consumed(j);
+    msgpack::object_handle oh;
+    
+    PixelSample ps;
+    TRay tray;
+    Vec3 P,N,Cs;
+    unsigned int materialid;
+
+    pac.next(oh);
+    std::cout << oh.get() << std::endl;
+    oh.get().convert(ps);
+    pac.next(oh);
+    oh.get().convert(tray);
+    pac.next(oh);
+    oh.get().convert(P);
+    pac.next(oh);
+    oh.get().convert(N); 
+    pac.next(oh);
+    oh.get().convert(Cs); 
+    pac.next(oh);
+    oh.get().convert(materialid);
+/*
+    while(pac.next(oh)) {
+      std::cout << oh.get() << std::endl;
+    }
+
     Document document;
     document.Parse(data);
 
@@ -333,9 +502,9 @@ int  shadeMessageHandler( AMQPMessage * message  )
     Vec3 P;
     P.x = document["P"][0].GetFloat();P.y = document["P"][1].GetFloat();P.z = document["P"][2].GetFloat();
     
-    
-
-    shadeworkqueue.push( ShadeJob(ps,P,N,tray));
+    unsigned int materialid = document["materialid"].GetInt();
+*/
+    shadeworkqueue.push( ShadeJob(ps,P,N,tray,materialid));
   }
   return 0;
 }

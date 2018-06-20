@@ -8,6 +8,7 @@
 #include <thread>
 #include <tuple>
 
+
 //#include <boost/uuid/uuid_io.hpp>
 //#include <boost/uuid.hpp>
 //#include <boost/uuid/uuid_generators.hpp>
@@ -21,6 +22,8 @@
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/error/en.h"
 
+#include <msgpack.hpp>
+
 
 #include <tbb/concurrent_queue.h>
 
@@ -32,9 +35,34 @@ using namespace rapidjson;
 using namespace embree;
 using namespace tbb;
  
+class Timer
+{
+public:
+    Timer() : beg_(clock_::now()) {}
+    void reset() { beg_ = clock_::now(); }
+    double elapsed() const { 
+        return std::chrono::duration_cast<second_>
+            (clock_::now() - beg_).count(); }
+
+private:
+    typedef std::chrono::high_resolution_clock clock_;
+    typedef std::chrono::duration<double, std::ratio<1> > second_;
+    std::chrono::time_point<clock_> beg_;
+};
+
+int numRays = 0;
+float totalRayTime = 0;
+int numPacketsIn = 0;
+int numPacketsOut = 0;
+float totalPacketsInTime = 0;
+float totalPacketsOutTime = 0;
+
+
 /* scene data */
 RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
+std::vector<std::vector<unsigned int>> materialids;
+
 
 const int numPhi = 64;
 const int numTheta = 2*numPhi;
@@ -42,11 +70,131 @@ const int numTheta = 2*numPhi;
 
 /* vertex and triangle layout */
 struct Vertex   { float x,y,z,r;  }; // FIXME: rename to Vertex4f
-struct Triangle { int materialid, v0, v1, v2; };
+struct Triangle { int v0, v1, v2; };
 
 //struct Vec3f {float x,y,z; };
-typedef struct PixelSample { int o, w, i, j; Vec3fa t;} PixelSample;
-typedef struct TRay {float pdf; int depth; Vec3fa o, d;} TRay;
+typedef struct PixelSample { 
+  int o, w, i, j; Vec3f t;
+  PixelSample(){};
+  PixelSample(int offset, int weight, int ii,int jj, Vec3f throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
+} PixelSample;
+
+typedef struct TRay {float pdf; 
+                    int depth; 
+                    Vec3f o, d;
+                    TRay(){};
+                    TRay(Vec3f origin, Vec3f direction):pdf(1.0),depth(0),o(origin),d(direction){};
+                    TRay(float p, int d, Vec3f origin, Vec3f direction):pdf(p),depth(d),o(origin),d(direction){};
+
+} TRay;
+
+// Routines to convert to and from messagepacks
+// User defined class template specialization
+namespace msgpack {
+MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS) {
+namespace adaptor {
+
+template<>
+struct convert<PixelSample> {
+    msgpack::object const& operator()(msgpack::object const& o, PixelSample& v) const {
+        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
+        if (o.via.array.size != 7) throw msgpack::type_error();
+        v = PixelSample(
+            o.via.array.ptr[0].as<int>(),
+            o.via.array.ptr[1].as<int>(),
+            o.via.array.ptr[2].as<int>(),
+            o.via.array.ptr[3].as<int>(),
+            Vec3f(
+              o.via.array.ptr[4].as<float>(),
+              o.via.array.ptr[5].as<float>(),
+              o.via.array.ptr[6].as<float>()           
+            )
+            );
+
+        return o;
+    }
+};
+
+template<>
+struct pack<PixelSample> {
+    template <typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& o, PixelSample const& v) const {
+        // packing member variables as an array.
+        o.pack_array(7);
+        o.pack(v.o);o.pack(v.w);o.pack(v.i);o.pack(v.j);
+        o.pack(v.t.x);o.pack(v.t.y);o.pack(v.t.z);
+        return o;
+    }
+};
+
+template<>
+struct convert<TRay> {
+    msgpack::object const& operator()(msgpack::object const& o, TRay& v) const {
+        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
+        if (o.via.array.size != 8) throw msgpack::type_error();
+        v = TRay(
+            o.via.array.ptr[0].as<float>(),
+            o.via.array.ptr[1].as<int>(),
+            Vec3f(
+              o.via.array.ptr[2].as<float>(),
+              o.via.array.ptr[3].as<float>(),
+              o.via.array.ptr[4].as<float>()           
+            ),
+            Vec3f(
+              o.via.array.ptr[5].as<float>(),
+              o.via.array.ptr[6].as<float>(),
+              o.via.array.ptr[7].as<float>()           
+            )
+            );
+
+        return o;
+    }
+};
+
+template<>
+struct pack<TRay> {
+    template <typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& o, TRay const& v) const {
+        // packing member variables as an array.
+        o.pack_array(8);
+        o.pack(v.pdf);o.pack(v.depth);
+        o.pack(v.o.x);o.pack(v.o.y);o.pack(v.o.z);
+        o.pack(v.d.x);o.pack(v.d.y);o.pack(v.d.z);
+
+        return o;
+    }
+};
+
+template<>
+struct convert<Vec3f> {
+    msgpack::object const& operator()(msgpack::object const& o, Vec3f& v) const {
+        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
+        if (o.via.array.size != 3) throw msgpack::type_error();
+        v = Vec3f(
+              o.via.array.ptr[0].as<float>(),
+              o.via.array.ptr[1].as<float>(),
+              o.via.array.ptr[2].as<float>()           
+            );
+
+        return o;
+    }
+};
+
+template<>
+struct pack<Vec3f> {
+    template <typename Stream>
+    packer<Stream>& operator()(msgpack::packer<Stream>& o, Vec3f const& v) const {
+        // packing member variables as an array.
+        o.pack_array(3);
+        o.pack(v.x);o.pack(v.y);o.pack(v.z);
+
+        return o;
+    }
+};
+
+}
+}
+}
 
 typedef struct RayJob {
   Ray ray; 
@@ -61,9 +209,9 @@ typedef struct OcclusionJob {
   Ray ray; 
   PixelSample ps; 
   TRay tray;
-  Vec3fa rad;
+  Vec3f rad;
   OcclusionJob(){};
-  OcclusionJob(Ray r,PixelSample p,TRay t,Vec3fa rd):ray(r),ps(p),tray(t),rad(rd)
+  OcclusionJob(Ray r,PixelSample p,TRay t,Vec3f rd):ray(r),ps(p),tray(t),rad(rd)
   {};
 } OcclusionJob;
 
@@ -109,7 +257,7 @@ unsigned int createSphere (RTCBuildQuality quality, std::vector<float> pos, cons
       int p11 = phi*numTheta+theta%numTheta;
 
       if (phi > 1) {
-        triangles[tri].materialid = 0;
+      //  triangles[tri].materialid = 0;
         triangles[tri].v0 = p10;
         triangles[tri].v1 = p01;
         triangles[tri].v2 = p00;
@@ -117,7 +265,7 @@ unsigned int createSphere (RTCBuildQuality quality, std::vector<float> pos, cons
       }
 
       if (phi < numPhi) {
-        triangles[tri].materialid = 0;
+      //  triangles[tri].materialid = 0;
         triangles[tri].v0 = p11;
         triangles[tri].v1 = p01;
         triangles[tri].v2 = p10;
@@ -148,8 +296,8 @@ unsigned int addGroundPlane (RTCBuildQuality quality, RTCScene scene_i)
   /* set triangles */
   Triangle* triangles = (Triangle*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT3,sizeof(Triangle),2);
   
-  triangles[0].materialid = 0; triangles[0].v0 = 0; triangles[0].v1 = 1; triangles[0].v2 = 2;
-  triangles[1].materialid = 0; triangles[1].v0 = 1; triangles[1].v1 = 3; triangles[1].v2 = 2;
+  //triangles[0].materialid = 0; triangles[0].v0 = 0; triangles[0].v1 = 1; triangles[0].v2 = 2;
+  //triangles[1].materialid = 0; triangles[1].v0 = 1; triangles[1].v1 = 3; triangles[1].v2 = 2;
 
   rtcCommitGeometry(geom);
   unsigned int geomID = rtcAttachGeometry(scene_i,geom);
@@ -172,10 +320,14 @@ void rayworker(int tid)
     ex->Declare("ptex","direct");
 
     cout << "ray worker: " << tid << " started" << endl;
+
+    Timer tmr;
     while(true)
     {
       if (rayworkqueue.try_pop(rj))
       {
+        numRays++;
+        tmr.reset();
         ray = rj.ray;
         ps = rj.ps;
         tray = rj.tray;
@@ -190,11 +342,46 @@ void rayworker(int tid)
         {
             Vec3f P = ray.org + ray.tfar*ray.dir;
             Vec3f N = normalize(ray.Ng);
-           // cout << P << endl;
-           // cout << ray.org <<endl;
-          try 
-          {
-            StringBuffer s;
+            unsigned int materialid = materialids[ray.geomID][ray.primID];
+            Vec3f Cs(1,1,1);
+            totalRayTime += tmr.elapsed();
+       //   try 
+       //   {
+            tmr.reset();
+            numPacketsOut++;
+          //  StringBuffer s;
+            msgpack::sbuffer ss;
+            msgpack::packer<msgpack::sbuffer> pk(&ss);
+
+            pk.pack(ps);
+            pk.pack(tray);
+            pk.pack(P);
+            pk.pack(N);
+            pk.pack(Cs);
+            pk.pack(materialid);
+/*
+            msgpack::unpacker pac;
+            pac.reserve_buffer(ss.size());
+            memcpy(pac.buffer(), ss.data(), ss.size());
+            pac.buffer_consumed(ss.size());
+            msgpack::object_handle oh;
+
+            pac.next(oh);
+            std::cout << oh.get() << std::endl;
+           // oh.get().convert(ps);
+            pac.next(oh);
+            std::cout << oh.get() << std::endl;
+          //  oh.get().convert(tray);
+            pac.next(oh);
+            std::cout << oh.get() << std::endl;
+            oh.get().convert(P);           
+            */
+            /*while(pac.next(oh)) {
+              std::cout << oh.get() << std::endl;
+            }*.
+            //PixelSample ps2;
+            //oh.get().convert(ps2);
+
             Writer<StringBuffer> writer(s);
             writer.StartObject();
             writer.Key("ps");
@@ -243,13 +430,34 @@ void rayworker(int tid)
             writer.StartArray();
             writer.Double(1.0);writer.Double(1.0);writer.Double(1.0);
             writer.EndArray();
-            writer.EndObject();
 
-            ex->Publish(s.GetString(),shadequeue);
-          } catch (const std::exception& e) {
-            cerr << "problem with message: " << endl;
-          }
+            writer.Key("materialid");
+            writer.Int(materialid);
+
+            writer.EndObject();
+*/
+            //ex->Publish(s.GetString(),shadequeue);
+            ex->Publish(ss.data(),ss.size(),shadequeue);
+            totalPacketsOutTime += tmr.elapsed();
+      //    } catch (const std::exception& e) {
+      //      cerr << "problem with message: " << endl;
+      //    }
            //    cout << s.GetString() << endl;
+        } else {
+          totalRayTime += tmr.elapsed();
+        }
+      
+        if ((numRays%10000 == 0) && (numRays > 0))
+        {
+          std::cout<<"total rays: "<<numRays<<endl;
+          std::cout<<"total time: "<<totalRayTime << endl;
+          std::cout<<"rays / sec: "<<numRays / totalRayTime << endl;
+        }
+        if ((numPacketsOut%10000 == 0) && (numPacketsOut > 0))
+        {
+          std::cout<<"total packets: "<<numPacketsOut<<endl;
+          std::cout<<"total time: "<<totalPacketsOutTime << endl;
+          std::cout<<"packets / sec: "<<numPacketsOut / totalPacketsOutTime << endl;
         }
       }
     }
@@ -260,7 +468,7 @@ void occlusionworker(int tid)
     Ray ray;
     PixelSample ps;
     TRay tray;
-    Vec3fa rad;
+    Vec3f rad;
     OcclusionJob rj;
 
     std::string host ="rabbitmq";
@@ -271,27 +479,34 @@ void occlusionworker(int tid)
     ex->Declare("ptex","direct");
 
     cout << "occlusion worker: " << tid << " started" << endl;
+    Timer tmr;
     while(true)
     {
       if (occlusionworkqueue.try_pop(rj))
       {
+        numRays++;
+        tmr.reset();
         ray = rj.ray;
         ps = rj.ps;
         tray = rj.tray;
         rad = rj.rad;
+        //std::cerr << ray.org << " -> " << ray.org + ray.tfar*ray.dir << std::endl;
+
+
         /*intersect ray with scene*/
         RTCIntersectContext context;
         rtcInitIntersectContext(&context);
         //rtcOccluded1(g_scene,&context,RTCRay_(ray));
         rtcIntersect1(g_scene,&context,RTCRayHit_(ray));
-
-
+        totalRayTime += tmr.elapsed();
         //if (ray.tfar >= 0.0001f)
         if (ray.geomID == RTC_INVALID_GEOMETRY_ID)
        // if(true)
         {
           try
           {
+            numPacketsOut++;
+            tmr.reset();
             StringBuffer s;
             Writer<StringBuffer> writer(s);
             writer.StartObject();
@@ -318,11 +533,12 @@ void occlusionworker(int tid)
             writer.EndObject();
 
             ex->Publish(s.GetString(),radiancequeue);
+            totalPacketsOutTime += tmr.elapsed();
           } catch (const std::exception& e) {
             cerr << "problem with message: " << endl;
           }
         }
-        else {
+        /*else {
           StringBuffer s;
             Writer<StringBuffer> writer(s);
             writer.StartObject();
@@ -349,7 +565,19 @@ void occlusionworker(int tid)
             writer.EndObject();
 
             ex->Publish(s.GetString(),radiancequeue);
-        }
+        }*/
+      }
+      if (numRays%10000 == 0)
+      {
+        std::cout<<"total rays: "<<numRays<<endl;
+        std::cout<<"total time: "<<totalRayTime << endl;
+        std::cout<<"rays / sec: "<<numRays / totalRayTime << endl;
+      }
+      if (numRays%10000 == 0)
+      {
+        std::cout<<"total packets: "<<numPacketsOut<<endl;
+        std::cout<<"total time: "<<totalPacketsOutTime << endl;
+        std::cout<<"packets / sec: "<<numPacketsOut / totalPacketsOutTime << endl;
       }
     }
 }
@@ -379,7 +607,7 @@ void setup_obj_scene()
   std::vector<tinyobj::material_t> materials;
 
   std::string err;
-  bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, "/usr/src/app/cornel_box.obj",
+  bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, "/usr/src/app/cornell_box.obj",
                               "/usr/src/app/", true);
   if (!err.empty()) {
     std::cerr << err << std::endl;
@@ -393,6 +621,8 @@ void setup_obj_scene()
   std::cout << "# of vertices  : " << (attrib.vertices.size() / 3) << std::endl;
   std::cout << "# of normals   : " << (attrib.normals.size() / 3) << std::endl;
   std::cout << "# of texcoords : " << (attrib.texcoords.size() / 2) << std::endl;
+  std::cout << "# of materials : " << (materials.size()) << std::endl;
+
 
   materials.push_back(tinyobj::material_t());
 
@@ -403,13 +633,14 @@ void setup_obj_scene()
   rtcSetSceneBuildQuality(g_scene,RTC_BUILD_QUALITY_LOW);
   //iterate over shapes
   for (size_t s = 0; s < shapes.size(); s++) { 
+    std::vector<unsigned int> mat_ids;
     //create geo
     RTCGeometry geom = rtcNewGeometry(g_device,RTC_GEOMETRY_TYPE_TRIANGLE);
     rtcSetGeometryBuildQuality(geom,RTC_BUILD_QUALITY_LOW);
     
     Vertex*   vertices  = (Vertex*  ) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_VERTEX,0,RTC_FORMAT_FLOAT3,sizeof(Vertex),attrib.vertices.size());
     Triangle* triangles = (Triangle*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT3,sizeof(Triangle),shapes[s].mesh.indices.size()/3);
-
+    //int* materialids = (int*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT,sizeof(int),shapes[s].mesh.indices.size()/3);
 
     for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
     {
@@ -425,24 +656,21 @@ void setup_obj_scene()
         // Invaid material ID. Use default material.
         current_material_id = materials.size() - 1;  // Default material is added to the last item in `materials`.
       }
-
-      triangles[f].materialid = current_material_id;
+      //cerr<<"mat id:"<<current_material_id<<endl;
+      mat_ids.push_back(current_material_id);
       triangles[f].v0 = idx0.vertex_index;
       triangles[f].v1 = idx1.vertex_index;
-      triangles[f].v2 = idx2.vertex_index;
-
-      cerr << triangles[f].v0 << "," << triangles[f].v1 << "," << triangles[f].v2 << endl;
-      
+      triangles[f].v2 = idx2.vertex_index;      
     }
+    materialids.push_back(mat_ids);
+
     for (size_t v = 0; v < attrib.vertices.size()/3;v++)
     {
       vertices[v].x = attrib.vertices[v*3];
       vertices[v].y = attrib.vertices[v*3+1];
       vertices[v].z = attrib.vertices[v*3+2];
-      cerr << vertices[v].x << "," << vertices[v].y << "," << vertices[v].z << endl;
-
     }
-
+/*
     for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
     {
       
@@ -450,7 +678,7 @@ void setup_obj_scene()
       cerr<<vertices[triangles[f].v1].x<<","<<vertices[triangles[f].v1].y<<","<<vertices[triangles[f].v1].z<<endl;
       cerr<<vertices[triangles[f].v2].x<<","<<vertices[triangles[f].v2].y<<","<<vertices[triangles[f].v2].z<<endl;
     }
-
+*/
     rtcCommitGeometry(geom);
     unsigned int geomID = rtcAttachGeometry(g_scene,geom);
     rtcReleaseGeometry(geom);
@@ -464,9 +692,11 @@ int onCancel(AMQPMessage * message ) {
 	return 0;
 }
 
-int  rayMessageHandler( AMQPMessage * message  ) 
+int rayMessageHandler( AMQPMessage * message  ) 
 {
   uint32_t j = 0;
+  Timer tmr;
+  numPacketsIn++;
 	char * data = message->getMessage(&j);
 	if (data)
   {
@@ -502,12 +732,20 @@ int  rayMessageHandler( AMQPMessage * message  )
     d.x = document["ray"]["d"][0].GetFloat();d.y = document["ray"]["d"][1].GetFloat();d.z = document["ray"]["d"][2].GetFloat();
     tray.d = d;
     
-    Ray ray(Vec3fa(tray.o),Vec3fa(tray.d),0.0,inf);
+    Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0,inf);
 
     rayworkqueue.push( RayJob(ray,ps,tray));
     } catch (const std::exception& e) {
       cerr << "problem with message: " << data << endl;
     }
+  }
+  totalPacketsInTime += tmr.elapsed();
+
+  if (numRays%10000 == 0)
+  {
+    std::cout<<"total packets In: "<<numPacketsIn<<endl;
+    std::cout<<"total time: "<<totalPacketsInTime << endl;
+    std::cout<<"packets in / sec: "<<numPacketsIn / totalPacketsInTime << endl;
   }
   return 0;
 }
@@ -515,6 +753,8 @@ int  rayMessageHandler( AMQPMessage * message  )
 int  occlusionMessageHandler( AMQPMessage * message  ) 
 {
   uint32_t j = 0;
+  Timer tmr;
+  numPacketsIn++;
 	char * data = message->getMessage(&j);
 	if (data)
   {
@@ -546,16 +786,23 @@ int  occlusionMessageHandler( AMQPMessage * message  )
     d.x = document["ray"]["d"][0].GetFloat();d.y = document["ray"]["d"][1].GetFloat();d.z = document["ray"]["d"][2].GetFloat();
     tray.d = d;
 
-    Vec3fa rad;
+    Vec3f rad;
     rad.x = document["rad"][0].GetFloat(); rad.y = document["rad"][1].GetFloat(); rad.z = document["rad"][2].GetFloat();
 
     float len = document["len"].GetFloat();
-    Ray ray(Vec3fa(tray.o),Vec3fa(tray.d),0.0001,len);
+    Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0001,len);
 
     occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
     } catch (const std::exception& e) {
       cerr << "problem with message: " << data << endl;
     }
+  }
+  totalPacketsInTime += tmr.elapsed();
+  if (numRays%10000 == 0)
+  {
+    std::cout<<"total packets: "<<numPacketsIn<<endl;
+    std::cout<<"total time: "<<totalPacketsInTime << endl;
+    std::cout<<"packets / sec: "<<numPacketsIn / totalPacketsInTime << endl;
   }
   return 0;
 }
