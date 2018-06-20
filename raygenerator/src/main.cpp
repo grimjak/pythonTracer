@@ -47,7 +47,7 @@ static int w = 640;
 static int h = 480;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
-static int samples = 1;
+static int samples = 16;
 
 
 typedef struct PixelSample {
@@ -55,10 +55,6 @@ typedef struct PixelSample {
   Vec3 t;
   PixelSample(){};
   PixelSample(int offset, int weight, int ii,int jj, Vec3 throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
-  //void Serialize(Writer &writer)
-  //{
-
-  //}
   } PixelSample;
 typedef struct TRay {float pdf; 
                     int depth; 
