@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <stdio.h>
-//#include <SimpleAmqpClient/SimpleAmqpClient.h>
 #include "AMQPcpp.h"
 
 #include <iostream>
@@ -8,30 +7,28 @@
 #include <thread>
 #include <tuple>
 
-
-//#include <boost/uuid/uuid_io.hpp>
-//#include <boost/uuid.hpp>
-//#include <boost/uuid/uuid_generators.hpp>
 #include <embree3/rtcore.h> 
-#include<tutorials/common/math/math.h>
-#include<tutorials/common/math/vec.h>
-#include<tutorials/common/core/ray.h>
-
-#include "rapidjson/document.h"
-#include "rapidjson/writer.h"
-#include "rapidjson/stringbuffer.h"
-#include "rapidjson/error/en.h"
+#include <tutorials/common/math/math.h>
+#include <tutorials/common/math/vec.h>
+#include <tutorials/common/core/ray.h>
 
 #include <msgpack.hpp>
-
 
 #include <tbb/concurrent_queue.h>
 
 #include "obj_loader.h"
+#define EMBREE
+#include "messaging.h"
+
+//#include <influxdb_raw_db_utf8.h>
+//#include <influxdb_simple_api.h>
+#include <influxdb.hpp>
+
+#include <netdb.h>
+
 
 //using namespace AmqpClient;
 using namespace std;
-using namespace rapidjson;
 using namespace embree;
 using namespace tbb;
  
@@ -56,7 +53,8 @@ int numPacketsIn = 0;
 int numPacketsOut = 0;
 float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
-
+int rayHist[11];
+unsigned int rayDepth;
 
 /* scene data */
 RTCDevice g_device = nullptr;
@@ -73,128 +71,7 @@ struct Vertex   { float x,y,z,r;  }; // FIXME: rename to Vertex4f
 struct Triangle { int v0, v1, v2; };
 
 //struct Vec3f {float x,y,z; };
-typedef struct PixelSample { 
-  int o, w, i, j; Vec3f t;
-  PixelSample(){};
-  PixelSample(int offset, int weight, int ii,int jj, Vec3f throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
-} PixelSample;
 
-typedef struct TRay {float pdf; 
-                    int depth; 
-                    Vec3f o, d;
-                    TRay(){};
-                    TRay(Vec3f origin, Vec3f direction):pdf(1.0),depth(0),o(origin),d(direction){};
-                    TRay(float p, int d, Vec3f origin, Vec3f direction):pdf(p),depth(d),o(origin),d(direction){};
-
-} TRay;
-
-// Routines to convert to and from messagepacks
-// User defined class template specialization
-namespace msgpack {
-MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS) {
-namespace adaptor {
-
-template<>
-struct convert<PixelSample> {
-    msgpack::object const& operator()(msgpack::object const& o, PixelSample& v) const {
-        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
-        if (o.via.array.size != 7) throw msgpack::type_error();
-        v = PixelSample(
-            o.via.array.ptr[0].as<int>(),
-            o.via.array.ptr[1].as<int>(),
-            o.via.array.ptr[2].as<int>(),
-            o.via.array.ptr[3].as<int>(),
-            Vec3f(
-              o.via.array.ptr[4].as<float>(),
-              o.via.array.ptr[5].as<float>(),
-              o.via.array.ptr[6].as<float>()           
-            )
-            );
-
-        return o;
-    }
-};
-
-template<>
-struct pack<PixelSample> {
-    template <typename Stream>
-    packer<Stream>& operator()(msgpack::packer<Stream>& o, PixelSample const& v) const {
-        // packing member variables as an array.
-        o.pack_array(7);
-        o.pack(v.o);o.pack(v.w);o.pack(v.i);o.pack(v.j);
-        o.pack(v.t.x);o.pack(v.t.y);o.pack(v.t.z);
-        return o;
-    }
-};
-
-template<>
-struct convert<TRay> {
-    msgpack::object const& operator()(msgpack::object const& o, TRay& v) const {
-        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
-        if (o.via.array.size != 8) throw msgpack::type_error();
-        v = TRay(
-            o.via.array.ptr[0].as<float>(),
-            o.via.array.ptr[1].as<int>(),
-            Vec3f(
-              o.via.array.ptr[2].as<float>(),
-              o.via.array.ptr[3].as<float>(),
-              o.via.array.ptr[4].as<float>()           
-            ),
-            Vec3f(
-              o.via.array.ptr[5].as<float>(),
-              o.via.array.ptr[6].as<float>(),
-              o.via.array.ptr[7].as<float>()           
-            )
-            );
-
-        return o;
-    }
-};
-
-template<>
-struct pack<TRay> {
-    template <typename Stream>
-    packer<Stream>& operator()(msgpack::packer<Stream>& o, TRay const& v) const {
-        // packing member variables as an array.
-        o.pack_array(8);
-        o.pack(v.pdf);o.pack(v.depth);
-        o.pack(v.o.x);o.pack(v.o.y);o.pack(v.o.z);
-        o.pack(v.d.x);o.pack(v.d.y);o.pack(v.d.z);
-
-        return o;
-    }
-};
-
-template<>
-struct convert<Vec3f> {
-    msgpack::object const& operator()(msgpack::object const& o, Vec3f& v) const {
-        if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
-        if (o.via.array.size != 3) throw msgpack::type_error();
-        v = Vec3f(
-              o.via.array.ptr[0].as<float>(),
-              o.via.array.ptr[1].as<float>(),
-              o.via.array.ptr[2].as<float>()           
-            );
-
-        return o;
-    }
-};
-
-template<>
-struct pack<Vec3f> {
-    template <typename Stream>
-    packer<Stream>& operator()(msgpack::packer<Stream>& o, Vec3f const& v) const {
-        // packing member variables as an array.
-        o.pack_array(3);
-        o.pack(v.x);o.pack(v.y);o.pack(v.z);
-
-        return o;
-    }
-};
-
-}
-}
-}
 
 typedef struct RayJob {
   Ray ray; 
@@ -319,9 +196,21 @@ void rayworker(int tid)
     AMQPExchange *ex = amqp.createExchange("ptex");
     ex->Declare("ptex","direct");
 
-    cout << "ray worker: " << tid << " started" << endl;
+    AMQPQueue * queue = amqp.createQueue(shadequeue);
+		queue->Declare();
+		queue->Bind( "ptex", shadequeue);
 
+    cout << "ray worker: " << tid << " started" << endl;
+    msgpack::sbuffer ss;
+    msgpack::packer<msgpack::sbuffer> pk(&ss);
+
+    hostent * record = gethostbyname("influxdb");
+    in_addr * address = (in_addr * )record->h_addr;
+	  string ip_address = inet_ntoa(* address);
+    influxdb_cpp::server_info si(ip_address, 8086, "db", "influx", "influx");
     Timer tmr;
+    float thisRayTime = 0;
+    float thisPacketTime = 0;
     while(true)
     {
       if (rayworkqueue.try_pop(rj))
@@ -331,6 +220,8 @@ void rayworker(int tid)
         ray = rj.ray;
         ps = rj.ps;
         tray = rj.tray;
+        rayHist[tray.depth]++;
+
         /*intersect ray with scene*/
         RTCIntersectContext context;
         rtcInitIntersectContext(&context);
@@ -344,14 +235,12 @@ void rayworker(int tid)
             Vec3f N = normalize(ray.Ng);
             unsigned int materialid = materialids[ray.geomID][ray.primID];
             Vec3f Cs(1,1,1);
-            totalRayTime += tmr.elapsed();
-       //   try 
-       //   {
+
+            thisRayTime = tmr.elapsed();
+            totalRayTime += thisRayTime;
+
             tmr.reset();
             numPacketsOut++;
-          //  StringBuffer s;
-            msgpack::sbuffer ss;
-            msgpack::packer<msgpack::sbuffer> pk(&ss);
 
             pk.pack(ps);
             pk.pack(tray);
@@ -359,105 +248,79 @@ void rayworker(int tid)
             pk.pack(N);
             pk.pack(Cs);
             pk.pack(materialid);
-/*
-            msgpack::unpacker pac;
-            pac.reserve_buffer(ss.size());
-            memcpy(pac.buffer(), ss.data(), ss.size());
-            pac.buffer_consumed(ss.size());
-            msgpack::object_handle oh;
 
-            pac.next(oh);
-            std::cout << oh.get() << std::endl;
-           // oh.get().convert(ps);
-            pac.next(oh);
-            std::cout << oh.get() << std::endl;
-          //  oh.get().convert(tray);
-            pac.next(oh);
-            std::cout << oh.get() << std::endl;
-            oh.get().convert(P);           
-            */
-            /*while(pac.next(oh)) {
-              std::cout << oh.get() << std::endl;
-            }*.
-            //PixelSample ps2;
-            //oh.get().convert(ps2);
-
-            Writer<StringBuffer> writer(s);
-            writer.StartObject();
-            writer.Key("ps");
-            writer.StartObject();
-            writer.Key("i");
-            writer.Int(ps.i);
-            writer.Key("j");
-            writer.Int(ps.j);
-            writer.Key("o");
-            writer.Int(ps.o);
-            writer.Key("w");
-            writer.Int(ps.w);
-            writer.Key("t");
-            writer.StartArray();
-            writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
-            writer.EndArray();
-            writer.EndObject();
-
-            writer.Key("ray");
-            writer.StartObject();
-            writer.Key("pdf");
-            writer.Double(tray.pdf);
-            writer.Key("depth");
-            writer.Int(tray.depth);
-            writer.Key("o");
-            writer.StartArray();
-            writer.Double(tray.o.x);writer.Double(tray.o.y);writer.Double(tray.o.z);
-            writer.EndArray();
-            writer.Key("d");
-            writer.StartArray();
-            writer.Double(tray.d.x);writer.Double(tray.d.y);writer.Double(tray.d.z);
-            writer.EndArray();
-            writer.EndObject();
-
-            writer.Key("P");
-            writer.StartArray();
-            writer.Double(P.x);writer.Double(P.y);writer.Double(P.z);
-            writer.EndArray();
-
-            writer.Key("N");
-            writer.StartArray();
-            writer.Double(N.x);writer.Double(N.y);writer.Double(N.z);
-            writer.EndArray();
-
-            writer.Key("Cs");
-            writer.StartArray();
-            writer.Double(1.0);writer.Double(1.0);writer.Double(1.0);
-            writer.EndArray();
-
-            writer.Key("materialid");
-            writer.Int(materialid);
-
-            writer.EndObject();
-*/
-            //ex->Publish(s.GetString(),shadequeue);
             ex->Publish(ss.data(),ss.size(),shadequeue);
-            totalPacketsOutTime += tmr.elapsed();
-      //    } catch (const std::exception& e) {
-      //      cerr << "problem with message: " << endl;
-      //    }
-           //    cout << s.GetString() << endl;
+            ss.clear();
+            thisPacketTime = tmr.elapsed();
+            totalPacketsOutTime += thisPacketTime;
         } else {
-          totalRayTime += tmr.elapsed();
+            thisRayTime = tmr.elapsed();
+            totalRayTime += thisRayTime;
         }
-      
-        if ((numRays%10000 == 0) && (numRays > 0))
+
+        if ((numRays%1000 == 0) && (numRays > 0))
         {
-          std::cout<<"total rays: "<<numRays<<endl;
-          std::cout<<"total time: "<<totalRayTime << endl;
-          std::cout<<"rays / sec: "<<numRays / totalRayTime << endl;
+        int success = influxdb_cpp::builder()
+          .meas("rayserver")
+          .tag("name", "totalRays")
+          .field("numrays", numRays)
+          .field("totalRayTime", totalRayTime)
+          .field("raysPerSecond", 1.0 / thisRayTime)
+
+          .meas("raydepth")
+          .tag("depth", "0")
+          .field("count",rayHist[0])
+
+          .meas("raydepth")
+          .tag("depth", "1")
+          .field("count",rayHist[1])
+
+          .meas("raydepth")
+          .tag("depth", "2")
+          .field("count",rayHist[2])
+
+          .meas("raydepth")
+          .tag("depth", "3")
+          .field("count",rayHist[3])
+
+          .meas("raydepth")
+          .tag("depth", "4")
+          .field("count",rayHist[4])
+
+          .meas("raydepth")
+          .tag("depth", "5")
+          .field("count",rayHist[5])
+
+          .meas("raydepth")
+          .tag("depth", "6")
+          .field("count",rayHist[6])
+
+          .meas("raydepth")
+          .tag("depth", "7")
+          .field("count",rayHist[7])
+
+          .meas("raydepth")
+          .tag("depth", "8")
+          .field("count",rayHist[8])
+
+          .meas("raydepth")
+          .tag("depth", "9")
+          .field("count",rayHist[9])
+
+          .meas("raydepth")
+          .tag("depth", "10")
+          .field("count",rayHist[10])                    
+          .post_http(si);
         }
-        if ((numPacketsOut%10000 == 0) && (numPacketsOut > 0))
+        if ((numPacketsOut%1000 == 0) && (numPacketsOut > 0))
         {
-          std::cout<<"total packets: "<<numPacketsOut<<endl;
-          std::cout<<"total time: "<<totalPacketsOutTime << endl;
-          std::cout<<"packets / sec: "<<numPacketsOut / totalPacketsOutTime << endl;
+        int success = influxdb_cpp::builder()
+          .meas("rayserver")
+          .tag("name", "totalPacketsOut")
+          .field("num", numPacketsOut)
+          .field("totalTime", totalPacketsOutTime)
+          .field("packetsPerSecond", 1.0 / thisPacketTime)
+          .post_http(si);
         }
       }
     }
@@ -478,8 +341,22 @@ void occlusionworker(int tid)
     AMQPExchange *ex = amqp.createExchange("ptex");
     ex->Declare("ptex","direct");
 
+    AMQPQueue * queue = amqp.createQueue(radiancequeue);
+		queue->Declare();
+		queue->Bind( "ptex", radiancequeue);
+
     cout << "occlusion worker: " << tid << " started" << endl;
+    hostent * record = gethostbyname("influxdb");
+    in_addr * address = (in_addr * )record->h_addr;
+	  string ip_address = inet_ntoa(* address);
+    influxdb_cpp::server_info si(ip_address, 8086, "db", "influx", "influx");
+
     Timer tmr;
+
+    msgpack::sbuffer ss;
+    msgpack::packer<msgpack::sbuffer> pk(&ss);
+    float thisRayTime = 0;
+    float thisPacketTime = 0;
     while(true)
     {
       if (occlusionworkqueue.try_pop(rj))
@@ -490,95 +367,63 @@ void occlusionworker(int tid)
         ps = rj.ps;
         tray = rj.tray;
         rad = rj.rad;
-        //std::cerr << ray.org << " -> " << ray.org + ray.tfar*ray.dir << std::endl;
-
-
+   
         /*intersect ray with scene*/
         RTCIntersectContext context;
         rtcInitIntersectContext(&context);
-        //rtcOccluded1(g_scene,&context,RTCRay_(ray));
-        rtcIntersect1(g_scene,&context,RTCRayHit_(ray));
-        totalRayTime += tmr.elapsed();
-        //if (ray.tfar >= 0.0001f)
-        if (ray.geomID == RTC_INVALID_GEOMETRY_ID)
-       // if(true)
+        rtcOccluded1(g_scene,&context,RTCRay_(ray));
+        //rtcIntersect1(g_scene,&context,RTCRayHit_(ray));
+        thisRayTime = tmr.elapsed();
+        totalRayTime += thisRayTime;
+        
+        if (ray.tfar >= 0.0001f)
+        //if (ray.geomID == RTC_INVALID_GEOMETRY_ID)
         {
-          try
-          {
-            numPacketsOut++;
-            tmr.reset();
-            StringBuffer s;
-            Writer<StringBuffer> writer(s);
-            writer.StartObject();
-            writer.Key("ps");
-            writer.StartObject();
-            writer.Key("i");
-            writer.Int(ps.i);
-            writer.Key("j");
-            writer.Int(ps.j);
-            writer.Key("o");
-            writer.Int(ps.o);
-            writer.Key("w");
-            writer.Int(ps.w);
-            writer.Key("t");
-            writer.StartArray();
-            writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
-            writer.EndArray();
-            writer.EndObject();
+          numPacketsOut++;
+          tmr.reset();
 
-            writer.Key("rgb");
-            writer.StartArray();
-            writer.Double(rad.x);writer.Double(rad.y);writer.Double(rad.z);
-            writer.EndArray();
-            writer.EndObject();
+          pk.pack(ps);
+          pk.pack(rad);
+          pk.pack(tray.depth);
 
-            ex->Publish(s.GetString(),radiancequeue);
-            totalPacketsOutTime += tmr.elapsed();
-          } catch (const std::exception& e) {
-            cerr << "problem with message: " << endl;
-          }
+          ex->Publish(ss.data(),ss.size(),radiancequeue);
+          ss.clear();
+          thisPacketTime = tmr.elapsed();
+          totalPacketsOutTime += thisPacketTime;
+        } else {
+          numPacketsOut++;
+          tmr.reset();
+          
+          pk.pack(ps);
+          pk.pack(Vec3f(0,0,0));
+          pk.pack(tray.depth);
+
+          ex->Publish(ss.data(),ss.size(),radiancequeue);
+          ss.clear();
+          thisPacketTime = tmr.elapsed();
+          totalPacketsOutTime += thisPacketTime;
         }
-        /*else {
-          StringBuffer s;
-            Writer<StringBuffer> writer(s);
-            writer.StartObject();
-            writer.Key("ps");
-            writer.StartObject();
-            writer.Key("i");
-            writer.Int(ps.i);
-            writer.Key("j");
-            writer.Int(ps.j);
-            writer.Key("o");
-            writer.Int(ps.o);
-            writer.Key("w");
-            writer.Int(ps.w);
-            writer.Key("t");
-            writer.StartArray();
-            writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
-            writer.EndArray();
-            writer.EndObject();
-
-            writer.Key("rgb");
-            writer.StartArray();
-            writer.Double(1.0);writer.Double(0.0);writer.Double(0.0);
-            writer.EndArray();
-            writer.EndObject();
-
-            ex->Publish(s.GetString(),radiancequeue);
-        }*/
       }
-      if (numRays%10000 == 0)
-      {
-        std::cout<<"total rays: "<<numRays<<endl;
-        std::cout<<"total time: "<<totalRayTime << endl;
-        std::cout<<"rays / sec: "<<numRays / totalRayTime << endl;
-      }
-      if (numRays%10000 == 0)
-      {
-        std::cout<<"total packets: "<<numPacketsOut<<endl;
-        std::cout<<"total time: "<<totalPacketsOutTime << endl;
-        std::cout<<"packets / sec: "<<numPacketsOut / totalPacketsOutTime << endl;
-      }
+        if ((numRays%1000 == 0) && (numRays > 0))
+        {
+        int success = influxdb_cpp::builder()
+          .meas("occlusionserver")
+          .tag("name", "totalRays")
+          .field("numrays", numRays)
+          .field("totalRayTime", totalRayTime)
+          .field("raysPerSecond", 1.0 / thisRayTime)
+          .post_http(si);
+        }
+        if ((numPacketsOut%1000 == 0) && (numPacketsOut > 0))
+        {
+        int success = influxdb_cpp::builder()
+          .meas("occlusionserver")
+          .tag("name", "totalPacketsOut")
+          .field("num", numPacketsOut)
+          .field("totalTime", totalPacketsOutTime)
+          .field("packetsPerSecond", 1.0 / thisPacketTime)
+          .post_http(si);
+        }
     }
 }
 
@@ -700,48 +545,28 @@ int rayMessageHandler( AMQPMessage * message  )
 	char * data = message->getMessage(&j);
 	if (data)
   {
-    Document document;
-    try
-    {
-      ParseResult result = document.Parse(data);
-      //std::cerr << data << endl; 
-      if (!result) {
-        std::cerr << "Ray message handler: JSON parse error: " << GetParseError_En(result.Code()) << result.Offset() << endl;
-        std::cerr << data << endl; 
-        assert(false);
-        return 0; // skip loop ;-)
-      }
-
-    PixelSample ps;
-    ps.i = document["ps"]["i"].GetInt();
-    ps.j = document["ps"]["j"].GetInt();
-    ps.o = document["ps"]["o"].GetInt();
-    ps.w = document["ps"]["w"].GetInt();
-    Vec3f t;
-    t.x = document["ps"]["t"][0].GetFloat();t.y = document["ps"]["t"][1].GetFloat();t.z = document["ps"]["t"][2].GetFloat();
-    ps.t = t;
-
-    //Need to clean this whole section up so we don't have multiple copies of ray data
-    TRay tray;
-    tray.pdf = document["ray"]["pdf"].GetFloat();
-    tray.depth = document["ray"]["depth"].GetInt();
-    Vec3f o;
-    o.x = document["ray"]["o"][0].GetFloat();o.y = document["ray"]["o"][1].GetFloat();o.z = document["ray"]["o"][2].GetFloat();
-    tray.o = o;
-    Vec3f d;
-    d.x = document["ray"]["d"][0].GetFloat();d.y = document["ray"]["d"][1].GetFloat();d.z = document["ray"]["d"][2].GetFloat();
-    tray.d = d;
+    msgpack::unpacker pac;
+    pac.reserve_buffer(j);
+    memcpy(pac.buffer(), data, j);
+    pac.buffer_consumed(j);
+    msgpack::object_handle oh;
     
+    PixelSample ps;
+    TRay tray;
+
+    pac.next(oh);
+    oh.get().convert(ps);
+    pac.next(oh);
+    oh.get().convert(tray);
+
     Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0,inf);
 
     rayworkqueue.push( RayJob(ray,ps,tray));
-    } catch (const std::exception& e) {
-      cerr << "problem with message: " << data << endl;
-    }
+
   }
   totalPacketsInTime += tmr.elapsed();
 
-  if (numRays%10000 == 0)
+  if (numPacketsIn%10000 == 0)
   {
     std::cout<<"total packets In: "<<numPacketsIn<<endl;
     std::cout<<"total time: "<<totalPacketsInTime << endl;
@@ -758,71 +583,54 @@ int  occlusionMessageHandler( AMQPMessage * message  )
 	char * data = message->getMessage(&j);
 	if (data)
   {
-    Document document;
-    try
-    {
-      ParseResult result = document.Parse(data);
-      if (!result) {
-        std::cerr << "Occlusion message handler: JSON parse error: " << GetParseError_En(result.Code()) << result.Offset() << endl;
-        std::cerr << data << endl;        return 0; // skip loop ;-)
-      }
+    msgpack::unpacker pac;
+    pac.reserve_buffer(j);
+    memcpy(pac.buffer(), data, j);
+    pac.buffer_consumed(j);
+    msgpack::object_handle oh;
+    
     PixelSample ps;
-    ps.i = document["ps"]["i"].GetInt();
-    ps.j = document["ps"]["j"].GetInt();
-    ps.o = document["ps"]["o"].GetInt();
-    ps.w = document["ps"]["w"].GetInt();
-    Vec3f t;
-    t.x = document["ps"]["t"][0].GetFloat();t.y = document["ps"]["t"][1].GetFloat();t.z = document["ps"]["t"][2].GetFloat();
-    ps.t = t;
-
-    //Need to clean this whole section up so we don't have multiple copies of ray data
     TRay tray;
-    tray.pdf = document["ray"]["pdf"].GetFloat();
-    tray.depth = document["ray"]["depth"].GetInt();
-    Vec3f o;
-    o.x = document["ray"]["o"][0].GetFloat();o.y = document["ray"]["o"][1].GetFloat();o.z = document["ray"]["o"][2].GetFloat();
-    tray.o = o;
-    Vec3f d;
-    d.x = document["ray"]["d"][0].GetFloat();d.y = document["ray"]["d"][1].GetFloat();d.z = document["ray"]["d"][2].GetFloat();
-    tray.d = d;
-
+    float len;
     Vec3f rad;
-    rad.x = document["rad"][0].GetFloat(); rad.y = document["rad"][1].GetFloat(); rad.z = document["rad"][2].GetFloat();
 
-    float len = document["len"].GetFloat();
+    pac.next(oh);
+    oh.get().convert(ps);
+    pac.next(oh);
+    oh.get().convert(tray);
+    pac.next(oh);
+    oh.get().convert(len);
+    pac.next(oh);
+    oh.get().convert(rad);    
+
     Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0001,len);
 
     occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
-    } catch (const std::exception& e) {
-      cerr << "problem with message: " << data << endl;
-    }
   }
   totalPacketsInTime += tmr.elapsed();
-  if (numRays%10000 == 0)
+  if (numPacketsIn%10000 == 0)
   {
-    std::cout<<"total packets: "<<numPacketsIn<<endl;
+    std::cout<<"total packets in: "<<numPacketsIn<<endl;
     std::cout<<"total time: "<<totalPacketsInTime << endl;
-    std::cout<<"packets / sec: "<<numPacketsIn / totalPacketsInTime << endl;
+    std::cout<<"packets in / sec: "<<numPacketsIn / totalPacketsInTime << endl;
   }
   return 0;
 }
 
 int main(int argc, char *argv[])
 {
-    cout << "Subscriber started" << endl;
+  cout << "Subscriber started" << endl;
 
   std::string host ="rabbitmq";
   std::string queuename = "rayqueue";
   bool occlusion = false;
-  if(std::string(argv[1]) == "occlusion")
+  if(strcmp(argv[1], "occlusion") == 0)
   {
     queuename = "occlusionqueue";
     occlusion = true;
     cout << "Occlusion server started" << endl;
-  } else {
-    
-    
-    // cout << "Ray server started" << endl;
+  } else { 
+    cout << "Ray server started" << endl;
   }
 
   //added delay for rabbit mq start to avoid failing with socket error
@@ -848,9 +656,9 @@ int main(int argc, char *argv[])
 		AMQPQueue * queue = amqp.createQueue(queuename);
 
 		queue->Declare();
-		queue->Bind( "ptex", "");
+		queue->Bind( "ptex", queuename);
 
-		queue->setConsumerTag("tag_123");
+		queue->setConsumerTag("");
     if(occlusion)	queue->addEvent(AMQP_MESSAGE, occlusionMessageHandler );
     else queue->addEvent(AMQP_MESSAGE, rayMessageHandler);
 		queue->addEvent(AMQP_CANCEL, onCancel );

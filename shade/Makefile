@@ -9,7 +9,7 @@ SRCS := $(shell find $(SRC_DIRS) -name *.cpp -or -name *.c -or -name *.s)
 OBJS := $(addsuffix .o,$(basename $(SRCS)))
 DEPS := $(OBJS:.o=.d)
 
-INCLUDES = -I/app/include -I/amqpcpp/include
+INCLUDES = -I/common -I/app/include -I/amqpcpp/include
 LIBS = -L/app/embree/build -ltbb -Wl,-Bstatic -lamqpcpp -lrabbitmq -lboost_chrono -lboost_system -lrt -lssl -lcrypto -Wl,-Bdynamic -ldl -lpthread
 
 CPPFLAGS = -std=c++11 -W -Wall -Wextra -pedantic $(INCLUDES)
