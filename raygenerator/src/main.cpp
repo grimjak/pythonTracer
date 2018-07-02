@@ -10,10 +10,12 @@
 //#include <boost/uuid/uuid_io.hpp>
 //#include <boost/uuid.hpp>
 //#include <boost/uuid/uuid_generators.hpp>
-
+/*
 #include "rapidjson/document.h"
 #include "rapidjson/writer.h"
 #include "rapidjson/stringbuffer.h"
+*/
+#include <msgpack.hpp>
 
 #include <tbb/concurrent_queue.h>
 
@@ -24,52 +26,57 @@
 
 #include <OpenImageIO/fmath.h>
 
+#define IMATH
+#include "messaging.h"
+
+#include <influxdb.hpp>
+#include <netdb.h>
+
 #include <random>
 #include "sobol.h"
 
 #define FILTER_TABLE_SIZE 1024
 
 using namespace std;
-using namespace rapidjson;
+//using namespace rapidjson;
 using namespace tbb;
 
-typedef float Float;
-typedef Imath_2_2::Vec3<Float>     Vec3;
-typedef Imath_2_2::Matrix33<Float> Matrix33;
-typedef Imath_2_2::Matrix44<Float> Matrix44;
-typedef Imath_2_2::Color3<Float>   Color3;
-typedef Imath_2_2::Vec2<Float>     Vec2;
+class Timer
+{
+public:
+    Timer() : beg_(clock_::now()) {}
+    void reset() { beg_ = clock_::now(); }
+    double elapsed() const { 
+        return std::chrono::duration_cast<second_>
+            (clock_::now() - beg_).count(); }
 
-static Vec3 O = Vec3(274,274,-440);
-//static Vec3 O = Vec3(0,0.35,-1);
+private:
+    typedef std::chrono::high_resolution_clock clock_;
+    typedef std::chrono::duration<double, std::ratio<1> > second_;
+    std::chrono::time_point<clock_> beg_;
+};
 
+int numRays = 0;
+float totalRayTime = 0;
+int numPacketsIn = 0;
+int numPacketsOut = 0;
+float totalPacketsInTime = 0;
+float totalPacketsOutTime = 0;
+
+static Vec3f O = Vec3f(274,274,-440);
 static int w = 640;
 static int h = 480;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
-static int samples = 16;
-
-
-typedef struct PixelSample {
-  int o, w, i, j; 
-  Vec3 t;
-  PixelSample(){};
-  PixelSample(int offset, int weight, int ii,int jj, Vec3 throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
-  } PixelSample;
-typedef struct TRay {float pdf; 
-                    int depth; 
-                    Vec3 o, d;
-                    TRay(){};
-                    TRay(Vec3 origin, Vec3 direction):o(origin),d(direction){};
-} TRay;
+static int samples = 4;
 
 typedef struct ShadeJob {
   PixelSample ps; 
-  Vec3 P;
-  Vec3 N;
+  Vec3f P;
+  Vec3f N;
   TRay tray;
   ShadeJob(){};
-  ShadeJob(PixelSample p,Vec3 pp,Vec3 nn,TRay t):ps(p),P(pp),N(nn),tray(t)
+  ShadeJob(PixelSample p,Vec3f pp,Vec3f nn,TRay t):ps(p),P(pp),N(nn),tray(t)
   {};
 } ShadeJob;
 
@@ -171,8 +178,8 @@ void util_cdf_inverted(const int resolution,
 //need to define O
 TRay generateSample(float x, float y)
 {
-  Vec3 Q = Vec3(O.x+x,O.y+y,O.z+1);
-  Vec3 D = (Q-O).normalize();
+  Vec3f Q = Vec3f(O.x+x,O.y+y,O.z+1);
+  Vec3f D = (Q-O).normalize();
   return TRay(O,D);
 }
 
@@ -188,13 +195,28 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
   AMQPExchange *ex = amqp.createExchange("ptex");
   ex->Declare("ptex","direct");
 
-  //need an offset per pixel
+  AMQPQueue * queue = amqp.createQueue(rayqueue);
+  queue->Declare();
+	queue->Bind( "ptex", rayqueue);
+  //ex->Bind(rayqueue,rayqueue);
 
+  //need an offset per pixel
+  msgpack::sbuffer ss;
+  msgpack::packer<msgpack::sbuffer> pk(&ss);
+
+  hostent * record = gethostbyname("influxdb");
+  in_addr * address = (in_addr * )record->h_addr;
+	string ip_address = inet_ntoa(* address);
+  influxdb_cpp::server_info si(ip_address, 8086, "db", "influx", "influx");
+  Timer tmr;
+  float thisRayTime = 0;
+  float thisPacketTime = 0;
   for (int i = 0; i<w; i++)
   {
-
     for (int j = 0; j<h; j++)
     {
+      numRays++;
+      tmr.reset();
       float rx = sobol::sample(++index,1);
       float ry = sobol::sample(index,2);
       float offset = offsets[j*w+i];
@@ -213,47 +235,42 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
       TRay r = generateSample(x,y);
       int o = rand()%(256);
 
-      PixelSample ps = PixelSample(o,iteration+1,i,j,Vec3(1,1,1));
-
-      StringBuffer s;
-      Writer<StringBuffer> writer(s);
-      writer.StartObject();
-      writer.Key("ps");
-      writer.StartObject();
-      writer.Key("i");
-      writer.Int(ps.i);
-      writer.Key("j");
-      writer.Int(ps.j);
-      writer.Key("o");
-      writer.Int(ps.o);
-      writer.Key("w");
-      writer.Int(ps.w);
-      writer.Key("t");
-      writer.StartArray();
-      writer.Double(ps.t.x);writer.Double(ps.t.y);writer.Double(ps.t.z);
-      writer.EndArray();
-      writer.EndObject();
-
-      writer.Key("ray");
-      writer.StartObject();
-      writer.Key("pdf");
-      writer.Double(1.0);
-      writer.Key("depth");
-      writer.Int(0);
-      writer.Key("o");
-      writer.StartArray();
-      writer.Double(r.o.x);writer.Double(r.o.y);writer.Double(r.o.z);
-      writer.EndArray();
-      writer.Key("d");
-      writer.StartArray();
-      writer.Double(r.d.x);writer.Double(r.d.y);writer.Double(r.d.z);
-      writer.EndArray();
-      writer.EndObject();
-      writer.EndObject();
-
-      ex->Publish(s.GetString(),rayqueue);
-
+      PixelSample ps = PixelSample(o,iteration+1,i,j,Vec3f(1,1,1));
+      thisRayTime = tmr.elapsed();
+      totalRayTime+=thisRayTime;
+      
+      tmr.reset();
+      ss.clear();
+      pk.pack(ps);
+      pk.pack(r);
+     // cout << ss.data() << endl;
+     //ex->Publish("test",rayqueue);
+      ex->Publish(ss.data(),ss.size(),rayqueue);
+      numPacketsOut++;
+      thisPacketTime = tmr.elapsed();
+      totalPacketsOutTime+= thisPacketTime;
     }
+      if ((numRays%1000 == 0) && (numRays > 0))
+      {
+        int success = influxdb_cpp::builder()
+          .meas("raygenerator")
+          .tag("name", "totalRays")
+          .field("numrays", numRays)
+          .field("totalRayTime", totalRayTime)
+          .field("raysPerSecond", 1.0 / thisRayTime)
+          .field("percentComplete", (float)numRays / (w*h*samples))
+          .post_http(si);
+      }
+      if ((numPacketsOut%1000 == 0) && (numPacketsOut > 0))
+      {
+        int success = influxdb_cpp::builder()
+          .meas("rayserver")
+          .tag("name", "totalPacketsOut")
+          .field("num", numPacketsOut)
+          .field("totalTime", totalPacketsOutTime)
+          .field("packetsPerSecond", 1.0 / thisPacketTime)
+          .post_http(si);
+      }
   }
 }
 
@@ -264,7 +281,7 @@ int onCancel(AMQPMessage * message ) {
 
 int  raygenMessageHandler( AMQPMessage * message  ) 
 {
-  uint32_t j = 0;
+/*  uint32_t j = 0;
 	char * data = message->getMessage(&j);
 	if (data)
   {
@@ -276,7 +293,7 @@ int  raygenMessageHandler( AMQPMessage * message  )
     ps.j = document["ps"]["j"].GetInt();
     ps.o = document["ps"]["o"].GetInt();
     ps.w = document["ps"]["w"].GetInt();
-    Vec3 t;
+    Vec3f t;
     t.x = document["ps"]["t"][0].GetFloat();t.y = document["ps"]["t"][1].GetFloat();t.z = document["ps"]["t"][2].GetFloat();
     ps.t = t;
 
@@ -284,22 +301,22 @@ int  raygenMessageHandler( AMQPMessage * message  )
     TRay tray;
     tray.pdf = document["ray"]["pdf"].GetFloat();
     tray.depth = document["ray"]["depth"].GetFloat();
-    Vec3 o;
+    Vec3f o;
     o.x = document["ray"]["o"][0].GetFloat();o.y = document["ray"]["o"][1].GetFloat();o.z = document["ray"]["o"][2].GetFloat();
     tray.o = o;
-    Vec3 d;
+    Vec3f d;
     d.x = document["ray"]["d"][0].GetFloat();d.y = document["ray"]["d"][1].GetFloat();d.z = document["ray"]["d"][2].GetFloat();
     tray.d = d;
 
-    Vec3 N;
+    Vec3f N;
     N.x = document["N"][0].GetFloat();N.y = document["N"][1].GetFloat();N.z = document["N"][2].GetFloat();
-    Vec3 P;
+    Vec3f P;
     P.x = document["P"][0].GetFloat();P.y = document["P"][1].GetFloat();P.z = document["P"][2].GetFloat();
     
     
 
     shadeworkqueue.push( ShadeJob(ps,P,N,tray));
-  }
+  }*/
   return 0;
 }
 
@@ -347,9 +364,11 @@ int main(int argc, char *argv[])
     
   for(int s = 0; s < samples; s++)
   {
+    cerr << "sample: " << s << endl;
     iterate(index,s,&offsets[0],&filter_table);
   }
   cerr << "index = " << index << endl;
+
   try {
 		AMQP amqp(host);
     //add occlusion queue 

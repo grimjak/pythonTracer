@@ -44,17 +44,23 @@ RUN \
   cmake -DMSGPACK_CXX11=ON . && \
   make install && \
   cd / && rm -rf msgpack-c
-  
+
 USER root
 WORKDIR /app
 
-RUN \
-  mkdir tmp && \
-  cd tmp && \ 
-  git clone https://github.com/Tencent/rapidjson.git && \
-  cp -rf rapidjson/include /app/include
+#RUN \
+#  mkdir tmp && \
+#  cd tmp && \ 
+#  git clone https://github.com/Tencent/rapidjson.git && \
+#  cp -rf rapidjson/include /app/include
 
-COPY . /app
+RUN \
+  git clone https://github.com/orca-zhang/influxdb-cpp.git && \
+  ls && \
+  cp influxdb-cpp/influxdb.hpp /usr/local/include
+
+COPY ./shade /app
+COPY ./common /common
 
 WORKDIR /app
 RUN make VERBOSE=1

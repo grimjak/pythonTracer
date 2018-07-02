@@ -1,11 +1,12 @@
 version: '3'
 services:
   rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:3.6.14-management
+    #image: docker.dneg.com/rabbitmq:3.6.14-management
     ports:
       - "8082:15672"
   rendercontrol:
-    image: rendercontrol:latest
+    image: docker.dneg.com/gfj/rendercontrol:latest
     build: 
       context: .
       dockerfile: Dockerfile
@@ -18,9 +19,10 @@ services:
      - ".:/usr/src//app"
     links:
       - rabbitmq
+      - influxdb
     command: python ./main.py control
   rayserver:
-    image: rayserver:latest
+    image: docker.dneg.com/gfj/rayserver:latest
     build:
       context: .
       dockerfile: ./embree/Dockerfile
@@ -30,7 +32,7 @@ services:
       - rabbitmq
     command: ./result rays
   occlusionserver:
-    image: rayserver:latest
+    image: docker.dneg.com/gfj/rayserver:latest
     build:
       context: .
       dockerfile: ./embree/Dockerfile
@@ -40,17 +42,17 @@ services:
       - rabbitmq
     command: ./result occlusion
   shadeserver:
-    image: shadeserver:latest  
+    image: docker.dneg.com/gfj/shadeserver:latest  
     build:
-      context: ./shade
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./shade/Dockerfile
     volumes:
      - ".:/usr/src//app"
     links:
       - rabbitmq
     command: ./result   
   renderwriter:
-    image: renderwriter:latest  
+    image: docker.dneg.com/gfj/renderwriter:latest  
     build: .
     volumes:
      - ".:/usr/src//app"
@@ -58,10 +60,10 @@ services:
       - rabbitmq
     command: python ./writer.py
   raygenerator:
-    image: raygenerator:latest  
+    image: docker.dneg.com/gfj/raygenerator:latest  
     build:
-      context: ./raygenerator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./raygenerator/Dockerfile
     volumes:
      - ".:/usr/src//app"
     links:
@@ -73,3 +75,23 @@ services:
       - "8081:8080"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
+  influxdb:
+    image: influxdb:1.4.3
+    ports:
+      - "8086:8086"
+      - "8083:8083"
+    environment:
+     - INFLUXDB_DB=db
+     - INFLUXDB_ADMIN_ENABLED=true
+     - INFLUXDB_ADMIN_USER=admin
+     - INFLUXDB_ADMIN_PASSWORD=admin
+     - INFLUXDB_USER=influx
+     - INFLUXDB_USER_PASSWORD=influx
+  grafana:
+    image: grafana/grafana:5.1.0
+    ports:
+     - "3000:3000"
+    links:
+     - influxdb 
+    volumes:
+     - ".:/var/lib/grafana"
