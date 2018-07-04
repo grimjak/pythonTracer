@@ -191,6 +191,9 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
   std::string host ="rabbitmq";
   std::string rayqueue = "rayqueue";
 
+  char hostname[HOST_NAME_MAX];
+  gethostname(hostname, HOST_NAME_MAX);
+
   AMQP amqp(host);
   AMQPExchange *ex = amqp.createExchange("ptex");
   ex->Declare("ptex","direct");
@@ -255,6 +258,7 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
         int success = influxdb_cpp::builder()
           .meas("raygenerator")
           .tag("name", "totalRays")
+          .tag("hostname", hostname)
           .field("numrays", numRays)
           .field("totalRayTime", totalRayTime)
           .field("raysPerSecond", 1.0 / thisRayTime)
@@ -266,6 +270,7 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
         int success = influxdb_cpp::builder()
           .meas("rayserver")
           .tag("name", "totalPacketsOut")
+          .tag("hostname", hostname)
           .field("num", numPacketsOut)
           .field("totalTime", totalPacketsOutTime)
           .field("packetsPerSecond", 1.0 / thisPacketTime)

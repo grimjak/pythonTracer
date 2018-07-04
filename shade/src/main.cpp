@@ -29,6 +29,8 @@
 
 #include <influxdb.hpp>
 #include <netdb.h>
+#include <unistd.h>
+#include <limits.h>
 
 #define IMATH
 #include "messaging.h"
@@ -158,6 +160,9 @@ void shadeworker(int tid)
     std::string occlusionqueue = "occlusionqueue";
     std::string rayqueue = "rayqueue";
 
+    char hostname[HOST_NAME_MAX];
+    gethostname(hostname, HOST_NAME_MAX);
+
     AMQP amqp(host);
     AMQPExchange *ex = amqp.createExchange("ptex");
     ex->Declare("ptex","direct");
@@ -228,7 +233,7 @@ void shadeworker(int tid)
         Vec3f lightVec = (L-P);
         float len = lightVec.length();
         //TRay rayToLight(P+N*0.0001,lightVec.normalize());
-        TRay rayToLight(tray.pdf,tray.depth,P+N*0.0001,lightVec.normalize());
+        TRay rayToLight(tray.pdf,tray.depth+1,P+N*0.0001,lightVec.normalize());
 
         //TRay rayToLight(P+N*0.0001,Vec3f(0,1,0));
 
@@ -266,7 +271,7 @@ void shadeworker(int tid)
         t *= Cs * tray.pdf;
 
         //russian roulette
-       /* float p = std::max(t.x,std::max(t.y,t.z));
+        float p = std::max(t.x,std::max(t.y,t.z));
         index++;
         if(p < sobol::sample(index,0))
         {
@@ -276,7 +281,7 @@ void shadeworker(int tid)
           continue; //need some kind of signal to say we've stopped.  Could just write 0 rad to radiance buffer?
         }
         t *= 1/p;
-*/
+
         TRay ray(P+N*0.0001,out_dir.normalize());
         ray.depth = tray.depth+1;
         ray.pdf = pdf;
@@ -301,6 +306,7 @@ void shadeworker(int tid)
         int success = influxdb_cpp::builder()
           .meas("shadeserver")
           .tag("name", "totalSamples")
+          .tag("hostname", hostname)
           .field("numSamples", numSamples)
           .field("totalSampleTime", totalSampleTime)
           .field("samplesPerSecond", 1.0 / thisSampleTime)
@@ -311,6 +317,7 @@ void shadeworker(int tid)
         int success = influxdb_cpp::builder()
           .meas("shadeserver")
           .tag("name", "totalPacketsOut")
+          .tag("hostname", hostname)
           .field("num", numPacketsOut)
           .field("totalTime", totalPacketsOutTime)
           .field("packetsPerSecond", 1.0 / thisPacketTime)

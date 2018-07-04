@@ -25,6 +25,8 @@
 #include <influxdb.hpp>
 
 #include <netdb.h>
+#include <unistd.h>
+#include <limits.h>
 
 
 //using namespace AmqpClient;
@@ -60,6 +62,7 @@ unsigned int rayDepth;
 RTCDevice g_device = nullptr;
 RTCScene g_scene = nullptr;
 std::vector<std::vector<unsigned int>> materialids;
+
 
 
 const int numPhi = 64;
@@ -192,6 +195,9 @@ void rayworker(int tid)
     std::string host ="rabbitmq";
     std::string shadequeue = "shadequeue";
 
+    char hostname[HOST_NAME_MAX];
+    gethostname(hostname, HOST_NAME_MAX);
+
     AMQP amqp(host);
     AMQPExchange *ex = amqp.createExchange("ptex");
     ex->Declare("ptex","direct");
@@ -243,7 +249,7 @@ void rayworker(int tid)
             numPacketsOut++;
 
             pk.pack(ps);
-            pk.pack(tray);
+            pk.pack(tray);  
             pk.pack(P);
             pk.pack(N);
             pk.pack(Cs);
@@ -254,6 +260,7 @@ void rayworker(int tid)
             thisPacketTime = tmr.elapsed();
             totalPacketsOutTime += thisPacketTime;
         } else {
+            //write a miss to the radiance queue?
             thisRayTime = tmr.elapsed();
             totalRayTime += thisRayTime;
         }
@@ -263,6 +270,7 @@ void rayworker(int tid)
         int success = influxdb_cpp::builder()
           .meas("rayserver")
           .tag("name", "totalRays")
+          .tag("hostname", hostname)
           .field("numrays", numRays)
           .field("totalRayTime", totalRayTime)
           .field("raysPerSecond", 1.0 / thisRayTime)
@@ -272,39 +280,39 @@ void rayworker(int tid)
           .field("count",rayHist[0])
 
           .meas("raydepth")
-          .tag("depth", "1")
+          .tag("depth", "01")
           .field("count",rayHist[1])
 
           .meas("raydepth")
-          .tag("depth", "2")
+          .tag("depth", "02")
           .field("count",rayHist[2])
 
           .meas("raydepth")
-          .tag("depth", "3")
+          .tag("depth", "03")
           .field("count",rayHist[3])
 
           .meas("raydepth")
-          .tag("depth", "4")
+          .tag("depth", "04")
           .field("count",rayHist[4])
 
           .meas("raydepth")
-          .tag("depth", "5")
+          .tag("depth", "05")
           .field("count",rayHist[5])
 
           .meas("raydepth")
-          .tag("depth", "6")
+          .tag("depth", "06")
           .field("count",rayHist[6])
 
           .meas("raydepth")
-          .tag("depth", "7")
+          .tag("depth", "07")
           .field("count",rayHist[7])
 
           .meas("raydepth")
-          .tag("depth", "8")
+          .tag("depth", "08")
           .field("count",rayHist[8])
 
           .meas("raydepth")
-          .tag("depth", "9")
+          .tag("depth", "09")
           .field("count",rayHist[9])
 
           .meas("raydepth")
@@ -316,6 +324,7 @@ void rayworker(int tid)
         {
         int success = influxdb_cpp::builder()
           .meas("rayserver")
+          .tag("hostname", hostname)
           .tag("name", "totalPacketsOut")
           .field("num", numPacketsOut)
           .field("totalTime", totalPacketsOutTime)
@@ -336,6 +345,9 @@ void occlusionworker(int tid)
 
     std::string host ="rabbitmq";
     std::string radiancequeue = "radiancequeue";
+
+    char hostname[HOST_NAME_MAX];
+    gethostname(hostname, HOST_NAME_MAX);
 
     AMQP amqp(host);
     AMQPExchange *ex = amqp.createExchange("ptex");
@@ -408,6 +420,7 @@ void occlusionworker(int tid)
         {
         int success = influxdb_cpp::builder()
           .meas("occlusionserver")
+          .tag("hostname", hostname)
           .tag("name", "totalRays")
           .field("numrays", numRays)
           .field("totalRayTime", totalRayTime)
@@ -418,6 +431,7 @@ void occlusionworker(int tid)
         {
         int success = influxdb_cpp::builder()
           .meas("occlusionserver")
+          .tag("hostname", hostname)
           .tag("name", "totalPacketsOut")
           .field("num", numPacketsOut)
           .field("totalTime", totalPacketsOutTime)
@@ -485,7 +499,6 @@ void setup_obj_scene()
     
     Vertex*   vertices  = (Vertex*  ) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_VERTEX,0,RTC_FORMAT_FLOAT3,sizeof(Vertex),attrib.vertices.size());
     Triangle* triangles = (Triangle*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT3,sizeof(Triangle),shapes[s].mesh.indices.size()/3);
-    //int* materialids = (int*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT,sizeof(int),shapes[s].mesh.indices.size()/3);
 
     for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
     {
@@ -501,7 +514,6 @@ void setup_obj_scene()
         // Invaid material ID. Use default material.
         current_material_id = materials.size() - 1;  // Default material is added to the last item in `materials`.
       }
-      //cerr<<"mat id:"<<current_material_id<<endl;
       mat_ids.push_back(current_material_id);
       triangles[f].v0 = idx0.vertex_index;
       triangles[f].v1 = idx1.vertex_index;
@@ -515,15 +527,7 @@ void setup_obj_scene()
       vertices[v].y = attrib.vertices[v*3+1];
       vertices[v].z = attrib.vertices[v*3+2];
     }
-/*
-    for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
-    {
-      
-      cerr<<vertices[triangles[f].v0].x<<","<<vertices[triangles[f].v0].y<<","<<vertices[triangles[f].v0].z<<endl;
-      cerr<<vertices[triangles[f].v1].x<<","<<vertices[triangles[f].v1].y<<","<<vertices[triangles[f].v1].z<<endl;
-      cerr<<vertices[triangles[f].v2].x<<","<<vertices[triangles[f].v2].y<<","<<vertices[triangles[f].v2].z<<endl;
-    }
-*/
+
     rtcCommitGeometry(geom);
     unsigned int geomID = rtcAttachGeometry(g_scene,geom);
     rtcReleaseGeometry(geom);

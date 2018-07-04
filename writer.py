@@ -63,7 +63,7 @@ class MySeriesHelper(SeriesHelper):
         series_name = 'events.stats.{server_name}'
 
         # Defines all the fields in this time series.
-        fields = ['samplesWritten', 'percentComplete']
+        fields = ['samplesWritten', 'percentComplete', 'timePerPixel']
 
         # Defines all the tags for the series.
         tags = ['server_name']
@@ -113,13 +113,12 @@ def setup_writer():
     totalCount = 0
     while True:
         count = 0   
-       # start = timeit.timeit() 
-        print ("waiting for messages")
-     
+        pixelCount = 0
+        start = time.perf_counter()
+
         for method_frame, properties, body in channel.consume('radiancequeue'):
             #start = timeit.timeit() 
             count += 1
-            totalCount += 1
             # Acknowledge the message
             channel.basic_ack(method_frame.delivery_tag)
             unpacker.feed(body)
@@ -128,15 +127,18 @@ def setup_writer():
             rad = np.array(unpacker.unpack())
             depth = unpacker.unpack()
    
-            if (depth == 1): weights[h-ps[3]-1,ps[2]] = ps[1] #doesn't work in shadowed areas unless we write 0
+            if (depth == 1): 
+                weights[h-ps[3]-1,ps[2]] = ps[1] #doesn't work in shadowed areas unless we write 0
+                totalCount+=1
+                pixelCount+=1
             img[h-ps[3]-1,ps[2]] += rad
             if rad.max() < (mins[h-ps[3]-1,ps[2]]).max() : mins[h-ps[3]-1,ps[2]] = rad
             if rad.max() > (maxs[h-ps[3]-1,ps[2]]).max() : maxs[h-ps[3]-1,ps[2]] = rad
 
-            if count > 10000: #make sure we don't miss the last few pixels, change to time based?
+            if time.perf_counter()-start > 1 and pixelCount > 0: #make sure we don't miss the last few pixels, change to time based?
                 break
         
-        MySeriesHelper(server_name='renderwriter', samplesWritten=count, percentComplete=totalCount / (w*h*samples))
+        MySeriesHelper(server_name='renderwriter', samplesWritten=count, percentComplete=totalCount / (w*h*samples), timePerPixel=(time.perf_counter()-start)/pixelCount)
         MySeriesHelper.commit()
 
         print("received 10000 radiance updates, writing")
@@ -170,5 +172,4 @@ radiancequeue = QueueWrapper('radiancequeue')
 
 
 if __name__ == '__main__':
-    print("started")
     setup_writer()
