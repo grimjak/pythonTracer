@@ -46,6 +46,7 @@ w = 640
 h = 480
 M_PI = 3.14159265358979323846
 M_INVPI = 1/ M_PI
+msgBatchSize = 20
 
 influxclient = InfluxDBClient(influxhost, port, user, password, dbname)
 
@@ -63,7 +64,7 @@ class MySeriesHelper(SeriesHelper):
         series_name = 'events.stats.{server_name}'
 
         # Defines all the fields in this time series.
-        fields = ['samplesWritten', 'percentComplete', 'timePerPixel']
+        fields = ['samplesWritten', 'percentComplete', 'pixelsPerSecond']
 
         # Defines all the tags for the series.
         tags = ['server_name']
@@ -123,27 +124,27 @@ def setup_writer():
             channel.basic_ack(method_frame.delivery_tag)
             unpacker.feed(body)
 
-            ps = unpacker.unpack()
-            rad = np.array(unpacker.unpack())
-            depth = unpacker.unpack()
-   
-            if (depth == 1): 
-                weights[h-ps[3]-1,ps[2]] = ps[1] #doesn't work in shadowed areas unless we write 0
-                totalCount+=1
-                pixelCount+=1
-            img[h-ps[3]-1,ps[2]] += rad
-            if rad.max() < (mins[h-ps[3]-1,ps[2]]).max() : mins[h-ps[3]-1,ps[2]] = rad
-            if rad.max() > (maxs[h-ps[3]-1,ps[2]]).max() : maxs[h-ps[3]-1,ps[2]] = rad
+            for b in range(msgBatchSize):
+                ps = unpacker.unpack()
+                rad = np.array(unpacker.unpack())
+                depth = unpacker.unpack()
+                if (depth == 1): 
+                    weights[h-ps[3]-1,ps[2]] = ps[1] #doesn't work in shadowed areas unless we write 0
+                    totalCount+=1
+                    pixelCount+=1
+                img[h-ps[3]-1,ps[2]] += rad
+                if rad.max() < (mins[h-ps[3]-1,ps[2]]).max() : mins[h-ps[3]-1,ps[2]] = rad
+                if rad.max() > (maxs[h-ps[3]-1,ps[2]]).max() : maxs[h-ps[3]-1,ps[2]] = rad
 
-            if time.perf_counter()-start > 1 and pixelCount > 0: #make sure we don't miss the last few pixels, change to time based?
-                break
-        
-        MySeriesHelper(server_name='renderwriter', samplesWritten=count, percentComplete=totalCount / (w*h*samples), timePerPixel=(time.perf_counter()-start)/pixelCount)
-        MySeriesHelper.commit()
+            if time.perf_counter()-start > 1 and pixelCount > 0: 
+                MySeriesHelper(server_name='renderwriter', samplesWritten=count, percentComplete=totalCount / (w*h*samples), pixelsPerSecond=pixelCount/(time.perf_counter()-start))
+                MySeriesHelper.commit()
+                
+                print("1s elapsed, writing")
+                imsave('static/tmp.png', (img/weights.clip(1,samples)).clip(0,1))
+                start = time.perf_counter()
+                pixelCount = 0
 
-        print("received 10000 radiance updates, writing")
-        #imsave('renders/tmp.png', (img/weights).clip(0,1), plugin='pil', format_str='png')
-        imsave('static/tmp.png', (img/weights.clip(1,samples)).clip(0,1))
 
         #var = maxs-mins
         #imsave('var.png', var.clip(0,1))
@@ -153,7 +154,7 @@ def setup_writer():
     # Cancel the consumer and return any pending messages
     requeued_messages = channel.cancel()
 
-samples = 4
+samples = 32
 filterwidth = 2.0
 
 

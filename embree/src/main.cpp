@@ -16,6 +16,7 @@
 
 #include <tbb/concurrent_queue.h>
 
+
 #include "obj_loader.h"
 #define EMBREE
 #include "messaging.h"
@@ -57,6 +58,7 @@ float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
 int rayHist[11];
 unsigned int rayDepth;
+unsigned int msgBatchSize = 20;
 
 /* scene data */
 RTCDevice g_device = nullptr;
@@ -95,8 +97,8 @@ typedef struct OcclusionJob {
   {};
 } OcclusionJob;
 
-concurrent_queue<RayJob> rayworkqueue;
-concurrent_queue<OcclusionJob> occlusionworkqueue;
+concurrent_bounded_queue<RayJob> rayworkqueue;
+concurrent_bounded_queue<OcclusionJob> occlusionworkqueue;
 
 
 /* adds a sphere to the scene */
@@ -217,9 +219,11 @@ void rayworker(int tid)
     Timer tmr;
     float thisRayTime = 0;
     float thisPacketTime = 0;
+    unsigned int batch = 0;
     while(true)
     {
-      if (rayworkqueue.try_pop(rj))
+  //    if (rayworkqueue.try_pop(rj))
+      rayworkqueue.pop(rj);   
       {
         numRays++;
         tmr.reset();
@@ -255,8 +259,14 @@ void rayworker(int tid)
             pk.pack(Cs);
             pk.pack(materialid);
 
-            ex->Publish(ss.data(),ss.size(),shadequeue);
-            ss.clear();
+            batch++;
+            if(batch==msgBatchSize)
+            {
+              ex->Publish(ss.data(),ss.size(),shadequeue);
+              ss.clear();
+              batch = 0;
+            }
+
             thisPacketTime = tmr.elapsed();
             totalPacketsOutTime += thisPacketTime;
         } else {
@@ -276,46 +286,57 @@ void rayworker(int tid)
           .field("raysPerSecond", 1.0 / thisRayTime)
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "0")
           .field("count",rayHist[0])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "01")
           .field("count",rayHist[1])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "02")
           .field("count",rayHist[2])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "03")
           .field("count",rayHist[3])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "04")
           .field("count",rayHist[4])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "05")
           .field("count",rayHist[5])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "06")
           .field("count",rayHist[6])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "07")
           .field("count",rayHist[7])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "08")
           .field("count",rayHist[8])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "09")
           .field("count",rayHist[9])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "10")
           .field("count",rayHist[10])                    
           .post_http(si);
@@ -369,9 +390,11 @@ void occlusionworker(int tid)
     msgpack::packer<msgpack::sbuffer> pk(&ss);
     float thisRayTime = 0;
     float thisPacketTime = 0;
+    unsigned int batch = 0;
     while(true)
     {
-      if (occlusionworkqueue.try_pop(rj))
+      occlusionworkqueue.pop(rj);
+    //  if (occlusionworkqueue.try_pop(rj))      
       {
         numRays++;
         tmr.reset();
@@ -398,8 +421,14 @@ void occlusionworker(int tid)
           pk.pack(rad);
           pk.pack(tray.depth);
 
-          ex->Publish(ss.data(),ss.size(),radiancequeue);
-          ss.clear();
+          batch++;
+          if(batch==msgBatchSize)
+          {
+            cerr<<"publishing: "<< ss.size()<< endl;
+            ex->Publish(ss.data(),ss.size(),radiancequeue);
+            ss.clear();
+            batch=0;
+          }
           thisPacketTime = tmr.elapsed();
           totalPacketsOutTime += thisPacketTime;
         } else {
@@ -410,8 +439,14 @@ void occlusionworker(int tid)
           pk.pack(Vec3f(0,0,0));
           pk.pack(tray.depth);
 
-          ex->Publish(ss.data(),ss.size(),radiancequeue);
-          ss.clear();
+          if(batch==msgBatchSize)
+          {
+            cerr<<"publishing: "<< ss.size()<< endl;
+            ex->Publish(ss.data(),ss.size(),radiancequeue);
+            ss.clear();
+            batch=0;
+          }     
+
           thisPacketTime = tmr.elapsed();
           totalPacketsOutTime += thisPacketTime;
         }
@@ -547,6 +582,8 @@ int rayMessageHandler( AMQPMessage * message  )
   Timer tmr;
   numPacketsIn++;
 	char * data = message->getMessage(&j);
+  cerr << "received: " << j << endl;
+
 	if (data)
   {
     msgpack::unpacker pac;
@@ -558,14 +595,17 @@ int rayMessageHandler( AMQPMessage * message  )
     PixelSample ps;
     TRay tray;
 
-    pac.next(oh);
-    oh.get().convert(ps);
-    pac.next(oh);
-    oh.get().convert(tray);
+    for (int i = 0; i < msgBatchSize; i++)
+    {
+      pac.next(oh);
+      oh.get().convert(ps);
+      pac.next(oh);
+      oh.get().convert(tray);
 
-    Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0,inf);
+      Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0,inf);
 
-    rayworkqueue.push( RayJob(ray,ps,tray));
+      rayworkqueue.push( RayJob(ray,ps,tray));
+    }
 
   }
   totalPacketsInTime += tmr.elapsed();
@@ -598,18 +638,21 @@ int  occlusionMessageHandler( AMQPMessage * message  )
     float len;
     Vec3f rad;
 
-    pac.next(oh);
-    oh.get().convert(ps);
-    pac.next(oh);
-    oh.get().convert(tray);
-    pac.next(oh);
-    oh.get().convert(len);
-    pac.next(oh);
-    oh.get().convert(rad);    
+    for (int i = 0; i < msgBatchSize; i++)
+    {
+      pac.next(oh);
+      oh.get().convert(ps);
+      pac.next(oh);
+      oh.get().convert(tray);
+      pac.next(oh);
+      oh.get().convert(len);
+      pac.next(oh);
+      oh.get().convert(rad);    
 
-    Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0001,len);
+      Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0001,len);
 
-    occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
+      occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
+    }
   }
   totalPacketsInTime += tmr.elapsed();
   if (numPacketsIn%10000 == 0)
@@ -636,6 +679,10 @@ int main(int argc, char *argv[])
   } else { 
     cout << "Ray server started" << endl;
   }
+
+  rayworkqueue.set_capacity(msgBatchSize);
+  occlusionworkqueue.set_capacity(msgBatchSize);
+
 
   //added delay for rabbit mq start to avoid failing with socket error
   std::this_thread::sleep_for(std::chrono::milliseconds(10000));
@@ -667,7 +714,7 @@ int main(int argc, char *argv[])
     else queue->addEvent(AMQP_MESSAGE, rayMessageHandler);
 		queue->addEvent(AMQP_CANCEL, onCancel );
 
-		queue->Consume(AMQP_NOACK);//
+		queue->Consume(AMQP_NOACK);//is there a batch version of this?
 
 	} catch (AMQPException e) {
 		std::cout << e.getMessage() << std::endl;

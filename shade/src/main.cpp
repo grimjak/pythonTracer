@@ -64,6 +64,9 @@ int numPacketsIn = 0;
 int numPacketsOut = 0;
 float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
+unsigned int msgBatchSize = 20;
+
+
 
 typedef struct ShadeJob {
   PixelSample ps; 
@@ -145,7 +148,7 @@ struct Sampling {
     }
 };
 
-concurrent_queue<ShadeJob> shadeworkqueue;
+concurrent_bounded_queue<ShadeJob> shadeworkqueue;
 
 
 void shadeworker(int tid)
@@ -178,8 +181,11 @@ void shadeworker(int tid)
     cout << "shade worker: " << tid << " started" << endl;
     int index = 0;
 
-    msgpack::sbuffer ss;
-    msgpack::packer<msgpack::sbuffer> pk(&ss);
+    msgpack::sbuffer shadss;
+    msgpack::packer<msgpack::sbuffer> shadpk(&shadss);
+
+    msgpack::sbuffer rayss;
+    msgpack::packer<msgpack::sbuffer> raypk(&rayss);  
 
     hostent * record = gethostbyname("influxdb");
     in_addr * address = (in_addr * )record->h_addr;
@@ -189,9 +195,19 @@ void shadeworker(int tid)
 
     float thisSampleTime = 0;
     float thisPacketTime = 0;
+    unsigned int shadBatch = 0;
+    unsigned int rayBatch = 0;
+
+    float totalDirectSampleTime = 0;
+    float totalIndirectSampleTime = 0;
+
+    //precompute sobol sequence?
+
+
     while(true)
     {
-      if (shadeworkqueue.try_pop(rj))
+      //if (shadeworkqueue.try_pop(rj))
+      shadeworkqueue.pop(rj);
       {
         ps = rj.ps;
         P = rj.P;
@@ -244,19 +260,27 @@ void shadeworker(int tid)
         //rad = N;
         thisSampleTime = tmr.elapsed();
         totalSampleTime+=thisSampleTime;
+        totalDirectSampleTime+=thisSampleTime;
         tmr.reset();
 
         numPacketsOut++;
-        ss.clear();
-        pk.pack(ps);
-        pk.pack(rayToLight);
-        pk.pack(len);
-        pk.pack(rad);
-        ex->Publish(ss.data(),ss.size(),occlusionqueue);
+        shadpk.pack(ps);
+        shadpk.pack(rayToLight);
+        shadpk.pack(len);
+        shadpk.pack(rad);
+
+        shadBatch++;
+        if(shadBatch == msgBatchSize)
+        {
+          ex->Publish(shadss.data(),shadss.size(),occlusionqueue);
+          shadss.clear();
+          shadBatch=0;
+        }
 
         thisPacketTime = tmr.elapsed();
         totalPacketsOutTime+=thisPacketTime;
         tmr.reset();
+        
         //indirect ray
        // Vec3f wi = tray.d;
         float pdf = 1;
@@ -291,13 +315,20 @@ void shadeworker(int tid)
 
         thisSampleTime += tmr.elapsed();
         totalSampleTime+=thisSampleTime;
+        totalIndirectSampleTime+=tmr.elapsed();
         tmr.reset();
         
-        ss.clear();
-        pk.pack(ps);
-        pk.pack(ray);
-        ex->Publish(ss.data(),ss.size(),rayqueue);
+        raypk.pack(ps);
+        raypk.pack(ray);
 
+        rayBatch++;
+        if(rayBatch==msgBatchSize)
+        {
+          ex->Publish(rayss.data(),rayss.size(),rayqueue);
+          rayss.clear();
+          rayBatch=0;
+        }
+        tmr.reset();
         thisPacketTime += tmr.elapsed();
         totalPacketsOutTime+=thisPacketTime;
 
@@ -309,6 +340,8 @@ void shadeworker(int tid)
           .tag("hostname", hostname)
           .field("numSamples", numSamples)
           .field("totalSampleTime", totalSampleTime)
+          .field("totalDirectSampleTime", totalDirectSampleTime)
+          .field("totalIndirectSampleTime", totalIndirectSampleTime)          
           .field("samplesPerSecond", 1.0 / thisSampleTime)
           .post_http(si);
         }
@@ -350,21 +383,24 @@ int  shadeMessageHandler( AMQPMessage * message  )
     Vec3f P,N,Cs;
     unsigned int materialid;
 
-    pac.next(oh);
-    //std::cout << oh.get() << std::endl;
-    oh.get().convert(ps);
-    pac.next(oh);
-    oh.get().convert(tray);
-    pac.next(oh);
-    oh.get().convert(P);
-    pac.next(oh);
-    oh.get().convert(N); 
-    pac.next(oh);
-    oh.get().convert(Cs); 
-    pac.next(oh);
-    oh.get().convert(materialid);
+    for (int i = 0; i < msgBatchSize; i++)
+    {
+      pac.next(oh);
+      //std::cout << oh.get() << std::endl;
+      oh.get().convert(ps);
+      pac.next(oh);
+      oh.get().convert(tray);
+      pac.next(oh);
+      oh.get().convert(P);
+      pac.next(oh);
+      oh.get().convert(N); 
+      pac.next(oh);
+      oh.get().convert(Cs); 
+      pac.next(oh);
+      oh.get().convert(materialid);
 
-    shadeworkqueue.push( ShadeJob(ps,P,N,tray,materialid));
+      shadeworkqueue.push( ShadeJob(ps,P,N,tray,materialid));
+    }
   }
   return 0;
 }
@@ -380,9 +416,10 @@ int main(int argc, char *argv[])
   std::this_thread::sleep_for(std::chrono::milliseconds(10000));
     
   //thread for tracing rays
-  const int numthreads = 2;
+  const int numthreads = 1;
   std::thread shadeworkthreads[numthreads];
   //launch threads
+  shadeworkqueue.set_capacity(msgBatchSize);
 
   for(int i=0;i<numthreads;++i) shadeworkthreads[i] = std::thread(shadeworker,i);
   

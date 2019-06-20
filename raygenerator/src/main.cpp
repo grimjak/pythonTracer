@@ -31,6 +31,8 @@
 
 #include <influxdb.hpp>
 #include <netdb.h>
+#include <unistd.h>
+#include <limits.h>
 
 #include <random>
 #include "sobol.h"
@@ -62,13 +64,28 @@ int numPacketsIn = 0;
 int numPacketsOut = 0;
 float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
+unsigned int msgBatchSize = 20;
+
 
 static Vec3f O = Vec3f(274,274,-440);
 static int w = 640;
 static int h = 480;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
-static int samples = 4;
+static int samples = 32;
+
+AMQPExchange *ex;
+AMQPQueue * queue;
+char hostname[HOST_NAME_MAX];
+std::string rayqueue = "rayqueue";
+
+msgpack::sbuffer ss;
+msgpack::packer<msgpack::sbuffer> pk(&ss);
+
+hostent * record = gethostbyname("influxdb");
+in_addr * address = (in_addr * )record->h_addr;
+string ip_address = inet_ntoa(* address);
+influxdb_cpp::server_info si(ip_address, 8086, "db", "influx", "influx");
 
 typedef struct ShadeJob {
   PixelSample ps; 
@@ -186,9 +203,9 @@ TRay generateSample(float x, float y)
 //generate one iterations worth of samples
 //need to define w and h and filterwidth
 // iterate over pixels, need to keep track of index
-void iterate(int &index, int iteration,float *offsets, vector<float> *filter_table)
+void iterate(int &index, int iteration,float *offsets, vector<float> *filter_table , int* indices)
 {
-  std::string host ="rabbitmq";
+  /*std::string host ="rabbitmq";
   std::string rayqueue = "rayqueue";
 
   char hostname[HOST_NAME_MAX];
@@ -201,7 +218,6 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
   AMQPQueue * queue = amqp.createQueue(rayqueue);
   queue->Declare();
 	queue->Bind( "ptex", rayqueue);
-  //ex->Bind(rayqueue,rayqueue);
 
   //need an offset per pixel
   msgpack::sbuffer ss;
@@ -210,14 +226,20 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
   hostent * record = gethostbyname("influxdb");
   in_addr * address = (in_addr * )record->h_addr;
 	string ip_address = inet_ntoa(* address);
-  influxdb_cpp::server_info si(ip_address, 8086, "db", "influx", "influx");
+  influxdb_cpp::server_info si(ip_address, 8086, "db", "influx", "influx");*/
   Timer tmr;
   float thisRayTime = 0;
   float thisPacketTime = 0;
-  for (int i = 0; i<w; i++)
+  unsigned int batch = 0;
+
+ // for (int i = 0; i<w; i++)
+ // {
+ //   for (int j = 0; j<h; j++)
+ //   {
+  for (int idx = 0; idx<w*h; idx++)
   {
-    for (int j = 0; j<h; j++)
-    {
+      int j = indices[idx] / w;
+      int i = indices[idx] - (j*w);
       numRays++;
       tmr.reset();
       float rx = sobol::sample(++index,1);
@@ -243,16 +265,21 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
       totalRayTime+=thisRayTime;
       
       tmr.reset();
-      ss.clear();
       pk.pack(ps);
       pk.pack(r);
-     // cout << ss.data() << endl;
-     //ex->Publish("test",rayqueue);
-      ex->Publish(ss.data(),ss.size(),rayqueue);
+
+      batch++;
+      if(batch==msgBatchSize)
+      {
+        ex->Publish(ss.data(),ss.size(),rayqueue);
+        ss.clear();
+        batch=0;
+      }
+
       numPacketsOut++;
       thisPacketTime = tmr.elapsed();
       totalPacketsOutTime+= thisPacketTime;
-    }
+    
       if ((numRays%1000 == 0) && (numRays > 0))
       {
         int success = influxdb_cpp::builder()
@@ -276,7 +303,7 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
           .field("packetsPerSecond", 1.0 / thisPacketTime)
           .post_http(si);
       }
-  }
+    }
 }
 
 int onCancel(AMQPMessage * message ) {
@@ -350,6 +377,7 @@ int main(int argc, char *argv[])
   //for now just start generating rays
   int index = 0;
   float offsets[w*h];
+  int indices[w*h];
 
   int width = 6;
   vector<float> filter_table(FILTER_TABLE_SIZE);
@@ -366,14 +394,37 @@ int main(int argc, char *argv[])
 
   for(int i = 0; i < w*h; i++)
     offsets[i] = dist(e2);
+
+  for(int i = 0; i < w; i++)
+    for(int j = 0; j < h; j++)
+      indices[j*w+i] = j*w+i;  
     
+  random_shuffle(&indices[0],&indices[(h*w)-1]);
+
+
+  gethostname(hostname, HOST_NAME_MAX);
+
+  AMQP amqp(host);
+  ex = amqp.createExchange("ptex"); //global
+  ex->Declare("ptex","direct");
+
+  queue = amqp.createQueue(rayqueue);
+  queue->Declare();
+	queue->Bind( "ptex", rayqueue);
+
+
+
   for(int s = 0; s < samples; s++)
   {
     cerr << "sample: " << s << endl;
-    iterate(index,s,&offsets[0],&filter_table);
+    iterate(index,s,&offsets[0],&filter_table, &indices[0]);
   }
   cerr << "index = " << index << endl;
 
+  //Wait for a command message which sets the camera and which pixels to generate samples for
+  //Need to tag pixel samples so they can be routed to the correct writer
+
+/*
   try {
 		AMQP amqp(host);
     //add occlusion queue 
@@ -390,6 +441,6 @@ int main(int argc, char *argv[])
 
 	} catch (AMQPException e) {
 		std::cout << e.getMessage() << std::endl;
-	}
+	}*/
   cout << "OK"<<endl;    
 }
