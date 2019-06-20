@@ -222,6 +222,7 @@ void shadeworker(int tid)
         unsigned int materialid = rj.materialid;
         Vec3f wi = Vec3f(tray.d.x,tray.d.y,tray.d.z);
         Vec3f Cs = Vec3f(1,1,1);
+        Vec3f Ca = Vec3f(1,1,1); //emmission
 
         switch(materialid)
         {
@@ -229,35 +230,28 @@ void shadeworker(int tid)
           case 2: Cs = Vec3f(0,1,0); break;
           case 3: Cs = Vec3f(0,0,1); break;
           case 4: Cs = Vec3f(1,1,1); break;
-
+          case 5: Ca = Vec3f(10,10,10); break;
         }
         
+        //what to do if we've hit an emmissive surface?  We could just pretend we're a light and return radiance.
+        //or accumulate radiance and add it
+
         //do shading
         //direct lighting
-        //Vec3f L = Vec3f(5,5,-10);
-       // Vec3f L = Vec3f(100,540,400);
        //random point on square
         index++;
         float lx = sobol::sample(index+ps.o,0);
         float ly = sobol::sample(index+ps.o,1);
         Vec3f L = Vec3f(213+(lx*((343-213)/2)),548,227+(ly*((332-227)/2)));
-       // Vec3f L = Vec3f(235,540,235);
         Vec3f color_light(1.5,1.5,1.5);
-        //        Vec3f color_light(1,1,1);
 
-        //TRay rayToLight(P+N*0.0001,(L-P).normalize());
         Vec3f lightVec = (L-P);
         float len = lightVec.length();
-        //TRay rayToLight(P+N*0.0001,lightVec.normalize());
         TRay rayToLight(tray.pdf,tray.depth+1,P+N*0.0001,lightVec.normalize());
 
-        //TRay rayToLight(P+N*0.0001,Vec3f(0,1,0));
-
         //calculate radiance here and pass it to be added if ray hits?
-        Vec3f rad = ps.t * color_light * Cs * N.dot(rayToLight.d) * M_1_PI; //separate PDF
-       // Vec3f rad = ps.t * color_light * Cs; //separate PDF
+        Vec3f rad = ps.t * ((color_light * Cs * N.dot(rayToLight.d))+Ca) * M_1_PI; //separate PDF
 
-        //rad = N;
         thisSampleTime = tmr.elapsed();
         totalSampleTime+=thisSampleTime;
         totalDirectSampleTime+=thisSampleTime;
@@ -282,14 +276,12 @@ void shadeworker(int tid)
         tmr.reset();
         
         //indirect ray
-       // Vec3f wi = tray.d;
         float pdf = 1;
         Vec3f out_dir;
         index++;
         float rx = sobol::sample(index+ps.o,0);
         float ry = sobol::sample(index+ps.o,1);
         Sampling::sample_cosine_hemisphere(N, rx, ry, out_dir, pdf);
-        //pdf = std::max(N.dot(wi), 0.0f) * float(M_1_PI); //incoming pdf
 
         Vec3f t = Vec3f(ps.t.x,ps.t.y,ps.t.z);
         t *= Cs * tray.pdf;
@@ -380,7 +372,7 @@ int  shadeMessageHandler( AMQPMessage * message  )
     
     PixelSample ps;
     TRay tray;
-    Vec3f P,N,Cs;
+    Vec3f P,N,Cs,Rad;
     unsigned int materialid;
 
     for (int i = 0; i < msgBatchSize; i++)
@@ -397,6 +389,8 @@ int  shadeMessageHandler( AMQPMessage * message  )
       pac.next(oh);
       oh.get().convert(Cs); 
       pac.next(oh);
+      oh.get().convert(Rad);
+      pac.next(oh;)
       oh.get().convert(materialid);
 
       shadeworkqueue.push( ShadeJob(ps,P,N,tray,materialid));

@@ -7,7 +7,7 @@ services:
   rendercontrol:
     image: rendercontrol:latest
     build: 
-      context: .
+      context: ./rendercontrol
       dockerfile: Dockerfile
     ports:
      - "5000:5000"
@@ -42,8 +42,8 @@ services:
   shadeserver:
     image: shadeserver:latest  
     build:
-      context: ./shade
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./shade/Dockerfile
     volumes:
      - ".:/usr/src//app"
     links:
@@ -51,7 +51,9 @@ services:
     command: ./result   
   renderwriter:
     image: renderwriter:latest  
-    build: .
+    build: 
+      context: ./writer
+      dockerfile: Dockerfile
     volumes:
      - ".:/usr/src//app"
     links:
@@ -60,8 +62,8 @@ services:
   raygenerator:
     image: raygenerator:latest  
     build:
-      context: ./raygenerator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./raygenerator/Dockerfile
     volumes:
      - ".:/usr/src//app"
     links:

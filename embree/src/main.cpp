@@ -245,6 +245,7 @@ void rayworker(int tid)
             Vec3f N = normalize(ray.Ng);
             unsigned int materialid = materialids[ray.geomID][ray.primID];
             Vec3f Cs(1,1,1);
+            Vec3f Rad(0,0,0);
 
             thisRayTime = tmr.elapsed();
             totalRayTime += thisRayTime;
@@ -257,6 +258,7 @@ void rayworker(int tid)
             pk.pack(P);
             pk.pack(N);
             pk.pack(Cs);
+            pk.pack(Rad);
             pk.pack(materialid);
 
             batch++;

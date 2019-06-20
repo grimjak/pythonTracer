@@ -1,0 +1,7 @@
+numpy
+Flask
+Flask-SocketIO
+scikit-image
+pika
+msgpack
+influxdb

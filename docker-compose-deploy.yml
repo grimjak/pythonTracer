@@ -53,9 +53,12 @@ services:
     command: ./result   
   renderwriter:
     image: docker.dneg.com/gfj/renderwriter:latest  
-    build: .
+    build:
+      context: ./writer
+      dockerfile: Dockerfile
     volumes:
      - ".:/usr/src//app"
+     - "./writer/writer.py:/usr/src/app/writer.py"
     links:
       - rabbitmq
     command: python ./writer.py
