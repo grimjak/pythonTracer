@@ -61,7 +61,7 @@ services:
      - "./writer/writer.py:/usr/src/app/writer.py"
     links:
       - rabbitmq
-    command: python ./writer.py
+    command: python -u ./writer.py
   raygenerator:
     image: docker.dneg.com/gfj/raygenerator:latest  
     build:

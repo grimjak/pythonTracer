@@ -34,8 +34,8 @@ while True:
 
 channel = connection.channel()
 
-w = 640
-h = 480
+w = 64
+h = 48
 M_PI = 3.14159265358979323846
 M_INVPI = 1/ M_PI
 msgBatchSize = 20
@@ -110,6 +110,7 @@ def setup_writer():
         start = time.perf_counter()
         frame = 1
         framecount = 0
+        dupcount = 0
 
         for method_frame, properties, body in channel.consume('radiancequeue'):
             #start = timeit.timeit() 
@@ -125,13 +126,14 @@ def setup_writer():
                 depth = unpacker.unpack()
                 i = h-ps[3]-1
                 j = ps[2]
-                iteration = ps[1]
+                iteration = ps[1]-1
 
-                if not imgbuffer.mask[i,j,iteration].any():
-                    print ("shouldn't have duplication")
-                    exit()
+                if not np.isnan(imgbuffer[i,j,iteration]) :
+                    print(i,j,iteration,imgbuffer[i,j,iteration],rad)
+                    dupcount += 1
+                    print ("shouldn't have duplication", str(dupcount))
                 #imgbuffer[i,j].append(rad)
-                imgbuffer[i,j,iteration] = rad
+                imgbuffer[i,j,iteration] = rad[0]
                 #if iteration > imgbufferSamples[i,j]:
                 #    imgbufferSamples[i,j] = iteration
                 pixelCount += 1
@@ -153,19 +155,16 @@ def setup_writer():
                 if rad.max() > (maxs[h-ps[3]-1,ps[2]]).max() : maxs[h-ps[3]-1,ps[2]] = rad
             '''
 
-            if time.perf_counter()-start > 120 and pixelCount > 0: 
+            if time.perf_counter()-start > 12 and pixelCount > 0: 
                 MySeriesHelper(server_name='renderwriter', samplesWritten=count, percentComplete=totalCount / (w*h*samples), pixelsPerSecond=pixelCount/(time.perf_counter()-start))
                 MySeriesHelper.commit()
                 
                 print("120s elapsed, writing")
-                #build output image from buffer
-                print(np.shape(imgbuffer))
-                
-                outimg = np.mean(imgbuffer,axis=2)
-                print(np.shape(outimg))
-                exit()
-                #outimg = img/weights
+                #build output image from buffer                
+                outimg = np.nanmean(imgbuffer,axis=2)
                 outimg = np.power(outimg,1.0/2.2)
+                outimg = np.squeeze(np.stack((outimg,)*3, axis=-1)) #add back in the missing colour axes
+
                 Image.fromarray((256*outimg).astype(np.uint8)).save("static/tmp{}.png".format(frame))
                 start = time.perf_counter()
                 pixelCount = 0
@@ -184,8 +183,11 @@ filterwidth = 2.0
 
 
 img = np.zeros((h, w, 3))
-imgbuffer = ma.masked_all((h,w,samples,3))
+#imgbuffer = ma.masked_all((h,w,samples,1))
+#imgbuffer.soften_mask()
 #imgbuffer = np.zeros((h,w,samples,3))
+imgbuffer = np.empty((h,w,samples,1))
+imgbuffer.fill(np.nan)
 
 weights = np.ones((h,w,1))
 mins = np.full((h, w, 3),[1e6,1e6,1e6])

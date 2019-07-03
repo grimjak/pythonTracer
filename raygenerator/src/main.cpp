@@ -68,8 +68,8 @@ unsigned int msgBatchSize = 20;
 
 
 static Vec3f O = Vec3f(274,274,-440);
-static int w = 640;
-static int h = 480;
+static int w = 64;
+static int h = 48;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
 static int samples = 1024;
@@ -205,37 +205,11 @@ TRay generateSample(float x, float y)
 // iterate over pixels, need to keep track of index
 void iterate(int &index, int iteration,float *offsets, vector<float> *filter_table , int* indices)
 {
-  /*std::string host ="rabbitmq";
-  std::string rayqueue = "rayqueue";
-
-  char hostname[HOST_NAME_MAX];
-  gethostname(hostname, HOST_NAME_MAX);
-
-  AMQP amqp(host);
-  AMQPExchange *ex = amqp.createExchange("ptex");
-  ex->Declare("ptex","direct");
-
-  AMQPQueue * queue = amqp.createQueue(rayqueue);
-  queue->Declare();
-	queue->Bind( "ptex", rayqueue);
-
-  //need an offset per pixel
-  msgpack::sbuffer ss;
-  msgpack::packer<msgpack::sbuffer> pk(&ss);
-
-  hostent * record = gethostbyname("influxdb");
-  in_addr * address = (in_addr * )record->h_addr;
-	string ip_address = inet_ntoa(* address);
-  influxdb_cpp::server_info si(ip_address, 8086, "db", "influx", "influx");*/
   Timer tmr;
   float thisRayTime = 0;
   float thisPacketTime = 0;
   unsigned int batch = 0;
 
- // for (int i = 0; i<w; i++)
- // {
- //   for (int j = 0; j<h; j++)
- //   {
   for (int idx = 0; idx<w*h; idx++)
   {
       int j = indices[idx] / w;

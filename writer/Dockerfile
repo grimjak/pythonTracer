@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 #COPY writer.py .
 
-CMD ["python", "./main.py control"]
+CMD ["python", "-u", "./main.py control"]
