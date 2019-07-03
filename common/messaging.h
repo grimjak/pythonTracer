@@ -20,9 +20,9 @@ typedef Imath_2_2::Vec2<Float>     Vec2;
 
 
 typedef struct PixelSample { 
-  int o, w, i, j; Vec3f t;
+  int o, w, i, j; Vec3f t; Vec3f r;
   PixelSample(){};
-  PixelSample(int offset, int weight, int ii,int jj, Vec3f throughput):o(offset),w(weight),i(ii),j(jj),t(throughput){}
+  PixelSample(int offset, int weight, int ii,int jj, Vec3f throughput, Vec3f radiance):o(offset),w(weight),i(ii),j(jj),t(throughput),r(radiance){}
 } PixelSample;
 
 typedef struct TRay {float pdf; 
@@ -44,7 +44,7 @@ template<>
 struct convert<PixelSample> {
     msgpack::object const& operator()(msgpack::object const& o, PixelSample& v) const {
         if (o.type != msgpack::type::ARRAY) throw msgpack::type_error();
-        if (o.via.array.size != 7) throw msgpack::type_error();
+        if (o.via.array.size != 10) throw msgpack::type_error();
         v = PixelSample(
             o.via.array.ptr[0].as<int>(),
             o.via.array.ptr[1].as<int>(),
@@ -54,6 +54,11 @@ struct convert<PixelSample> {
               o.via.array.ptr[4].as<float>(),
               o.via.array.ptr[5].as<float>(),
               o.via.array.ptr[6].as<float>()           
+            ),
+            Vec3f(
+              o.via.array.ptr[7].as<float>(),
+              o.via.array.ptr[8].as<float>(),
+              o.via.array.ptr[9].as<float>()           
             )
             );
 
@@ -66,9 +71,10 @@ struct pack<PixelSample> {
     template <typename Stream>
     packer<Stream>& operator()(msgpack::packer<Stream>& o, PixelSample const& v) const {
         // packing member variables as an array.
-        o.pack_array(7);
+        o.pack_array(10);
         o.pack(v.o);o.pack(v.w);o.pack(v.i);o.pack(v.j);
         o.pack(v.t.x);o.pack(v.t.y);o.pack(v.t.z);
+        o.pack(v.r.x);o.pack(v.r.y);o.pack(v.r.z);
         return o;
     }
 };

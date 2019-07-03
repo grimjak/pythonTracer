@@ -1,20 +1,12 @@
 import numpy as np
+import numpy.ma as ma
 import sys
-#import matplotlib.pyplot as plt
-#import io
 from skimage.io import imsave
-#from threading import Thread
-#import queue
 
 from math import sqrt, cos, sin, floor
 #import random
 import time
-#import json
-#from PIL import Image
-
-from flask import Flask
-from flask import send_file
-from flask_socketio import SocketIO, emit
+from PIL import Image
 
 import pika
 import msgpack 
@@ -126,28 +118,58 @@ def setup_writer():
             channel.basic_ack(method_frame.delivery_tag)
             unpacker.feed(body)
 
+            #is it better to keep hold of the entire framebuffer and average the samples whenever we write?
             for b in range(msgBatchSize):
                 ps = unpacker.unpack()
                 rad = np.array(unpacker.unpack())
                 depth = unpacker.unpack()
+                i = h-ps[3]-1
+                j = ps[2]
+                iteration = ps[1]
+
+                if not imgbuffer.mask[i,j,iteration].any():
+                    print ("shouldn't have duplication")
+                    exit()
+                #imgbuffer[i,j].append(rad)
+                imgbuffer[i,j,iteration] = rad
+                #if iteration > imgbufferSamples[i,j]:
+                #    imgbufferSamples[i,j] = iteration
+                pixelCount += 1
+                framecount += 1
+
+            '''
+            for b in range(msgBatchSize):
+                ps = unpacker.unpack()
+                rad = np.array(unpacker.unpack())
+                depth = unpacker.unpack()
+                weights[h-ps[3]-1,ps[2]] = ps[1]
                 if (depth == 1): 
-                    weights[h-ps[3]-1,ps[2]] = ps[1] #doesn't work in shadowed areas unless we write 0
+                    #weights[h-ps[3]-1,ps[2]] = ps[1] #this doesn't work anymore as we could get here from russion roulette or any ray miss
                     totalCount+=1
                     framecount+=1
                     pixelCount+=1
                 img[h-ps[3]-1,ps[2]] += rad
                 if rad.max() < (mins[h-ps[3]-1,ps[2]]).max() : mins[h-ps[3]-1,ps[2]] = rad
                 if rad.max() > (maxs[h-ps[3]-1,ps[2]]).max() : maxs[h-ps[3]-1,ps[2]] = rad
+            '''
 
-            if time.perf_counter()-start > 1 and pixelCount > 0: 
+            if time.perf_counter()-start > 120 and pixelCount > 0: 
                 MySeriesHelper(server_name='renderwriter', samplesWritten=count, percentComplete=totalCount / (w*h*samples), pixelsPerSecond=pixelCount/(time.perf_counter()-start))
                 MySeriesHelper.commit()
                 
-                print("1s elapsed, writing")
-                imsave("static/tmp{}.png".format(frame), (img/weights.clip(1,samples)).clip(0,1))
+                print("120s elapsed, writing")
+                #build output image from buffer
+                print(np.shape(imgbuffer))
+                
+                outimg = np.mean(imgbuffer,axis=2)
+                print(np.shape(outimg))
+                exit()
+                #outimg = img/weights
+                outimg = np.power(outimg,1.0/2.2)
+                Image.fromarray((256*outimg).astype(np.uint8)).save("static/tmp{}.png".format(frame))
                 start = time.perf_counter()
                 pixelCount = 0
-                if framecount > w*h*(frame*0.1) :
+                if framecount > w*h*samples*(frame*0.1) :
                     frame += 1
                     framecount = 0
 
@@ -157,12 +179,15 @@ def setup_writer():
     # Cancel the consumer and return any pending messages
     requeued_messages = channel.cancel()
 
-samples = 32
+samples = 1024
 filterwidth = 2.0
 
 
 img = np.zeros((h, w, 3))
-weights = np.zeros((h,w,1))
+imgbuffer = ma.masked_all((h,w,samples,3))
+#imgbuffer = np.zeros((h,w,samples,3))
+
+weights = np.ones((h,w,1))
 mins = np.full((h, w, 3),[1e6,1e6,1e6])
 maxs = np.zeros((h, w, 3))
 

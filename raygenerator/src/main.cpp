@@ -72,7 +72,7 @@ static int w = 640;
 static int h = 480;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
-static int samples = 32;
+static int samples = 1024;
 
 AMQPExchange *ex;
 AMQPQueue * queue;
@@ -260,7 +260,7 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
       TRay r = generateSample(x,y);
       int o = rand()%(256);
 
-      PixelSample ps = PixelSample(o,iteration+1,i,j,Vec3f(1,1,1));
+      PixelSample ps = PixelSample(o,iteration+1,i,j,Vec3f(1,1,1),Vec3f(0,0,0));
       thisRayTime = tmr.elapsed();
       totalRayTime+=thisRayTime;
       

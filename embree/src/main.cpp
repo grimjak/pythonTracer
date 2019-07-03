@@ -196,6 +196,7 @@ void rayworker(int tid)
 
     std::string host ="rabbitmq";
     std::string shadequeue = "shadequeue";
+    std::string radiancequeue = "radiancequeue";
 
     char hostname[HOST_NAME_MAX];
     gethostname(hostname, HOST_NAME_MAX);
@@ -208,9 +209,16 @@ void rayworker(int tid)
 		queue->Declare();
 		queue->Bind( "ptex", shadequeue);
 
+    AMQPQueue * queue2 = amqp.createQueue(radiancequeue);
+		queue2->Declare();
+		queue2->Bind( "ptex", radiancequeue);
+
     cout << "ray worker: " << tid << " started" << endl;
     msgpack::sbuffer ss;
     msgpack::packer<msgpack::sbuffer> pk(&ss);
+
+    msgpack::sbuffer radss;
+    msgpack::packer<msgpack::sbuffer> radpk(&radss);
 
     hostent * record = gethostbyname("influxdb");
     in_addr * address = (in_addr * )record->h_addr;
@@ -220,6 +228,8 @@ void rayworker(int tid)
     float thisRayTime = 0;
     float thisPacketTime = 0;
     unsigned int batch = 0;
+    unsigned int radBatch = 0;
+
     while(true)
     {
   //    if (rayworkqueue.try_pop(rj))
@@ -258,7 +268,6 @@ void rayworker(int tid)
             pk.pack(P);
             pk.pack(N);
             pk.pack(Cs);
-            pk.pack(Rad);
             pk.pack(materialid);
 
             batch++;
@@ -272,9 +281,21 @@ void rayworker(int tid)
             thisPacketTime = tmr.elapsed();
             totalPacketsOutTime += thisPacketTime;
         } else {
-            //write a miss to the radiance queue?
+            //write a miss to the radiance queue? Call shade again in a mode that just writes the radiance?  
             thisRayTime = tmr.elapsed();
             totalRayTime += thisRayTime;
+            radpk.pack(ps);
+            radpk.pack(ps.r);
+            radpk.pack(tray.depth);
+
+            radBatch++;
+            if(radBatch==msgBatchSize)
+            {
+              cerr<<"publishing from ray miss: "<< radss.size()<< endl;
+              ex->Publish(radss.data(),radss.size(),radiancequeue);
+              radss.clear();
+              radBatch=0;
+            }
         }
 
         if ((numRays%1000 == 0) && (numRays > 0))
@@ -420,13 +441,13 @@ void occlusionworker(int tid)
           tmr.reset();
 
           pk.pack(ps);
-          pk.pack(rad);
+          pk.pack(rad+ps.r); //calculated radiance for light plus accumulated radiance along ray
           pk.pack(tray.depth);
 
           batch++;
           if(batch==msgBatchSize)
           {
-            cerr<<"publishing: "<< ss.size()<< endl;
+            cerr<<"publishing from occl: "<< ss.size()<< endl;
             ex->Publish(ss.data(),ss.size(),radiancequeue);
             ss.clear();
             batch=0;
@@ -438,7 +459,7 @@ void occlusionworker(int tid)
           tmr.reset();
           
           pk.pack(ps);
-          pk.pack(Vec3f(0,0,0));
+          pk.pack(Vec3f(0,0,0)); 
           pk.pack(tray.depth);
 
           if(batch==msgBatchSize)
@@ -503,7 +524,7 @@ void setup_obj_scene()
   std::vector<tinyobj::material_t> materials;
 
   std::string err;
-  bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, "/usr/src/app/cornell_box.obj",
+  bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, "/usr/src/app/cornell_box_3.obj",
                               "/usr/src/app/", true);
   if (!err.empty()) {
     std::cerr << err << std::endl;

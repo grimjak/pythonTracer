@@ -162,6 +162,8 @@ void shadeworker(int tid)
     std::string host ="rabbitmq";
     std::string occlusionqueue = "occlusionqueue";
     std::string rayqueue = "rayqueue";
+    std::string radiancequeue = "radiancequeue";
+
 
     char hostname[HOST_NAME_MAX];
     gethostname(hostname, HOST_NAME_MAX);
@@ -178,6 +180,10 @@ void shadeworker(int tid)
     queue2->Declare();
 	  queue2->Bind( "ptex", rayqueue);
 
+    AMQPQueue * queue3 = amqp.createQueue(radiancequeue);
+		queue3->Declare();
+		queue3->Bind( "ptex", radiancequeue);
+
     cout << "shade worker: " << tid << " started" << endl;
     int index = 0;
 
@@ -186,6 +192,9 @@ void shadeworker(int tid)
 
     msgpack::sbuffer rayss;
     msgpack::packer<msgpack::sbuffer> raypk(&rayss);  
+
+    msgpack::sbuffer radss;
+    msgpack::packer<msgpack::sbuffer> radpk(&radss);
 
     hostent * record = gethostbyname("influxdb");
     in_addr * address = (in_addr * )record->h_addr;
@@ -197,6 +206,7 @@ void shadeworker(int tid)
     float thisPacketTime = 0;
     unsigned int shadBatch = 0;
     unsigned int rayBatch = 0;
+    unsigned int radBatch = 0;
 
     float totalDirectSampleTime = 0;
     float totalIndirectSampleTime = 0;
@@ -214,7 +224,7 @@ void shadeworker(int tid)
         N = rj.N.normalize();
         tray = rj.tray;
 
-        if (tray.depth >= depth_max) continue;
+        //if (tray.depth >= depth_max) continue; //if we're terminating the ray we need to write the accumulated radiance
 
         numSamples++;
         tmr.reset();
@@ -222,19 +232,21 @@ void shadeworker(int tid)
         unsigned int materialid = rj.materialid;
         Vec3f wi = Vec3f(tray.d.x,tray.d.y,tray.d.z);
         Vec3f Cs = Vec3f(1,1,1);
-        Vec3f Ca = Vec3f(1,1,1); //emmission
+        Vec3f Ca = Vec3f(0,0,0); //emmission
 
         switch(materialid)
         {
-          case 1: Cs = Vec3f(1,0,0); break;
-          case 2: Cs = Vec3f(0,1,0); break;
-          case 3: Cs = Vec3f(0,0,1); break;
+          case 0: Cs = Vec3f(0,0.15,1); Ca = Vec3f(0,0,0); break;
+          case 1: Cs = Vec3f(0,1,0); Ca = Vec3f(0,0,0); break;
+          case 2: Cs = Vec3f(1,1,1); Ca = Vec3f(200000,200000,200000); break;
+          case 3: Cs = Vec3f(1,0,0); Ca = Vec3f(0,0,0); break;
           case 4: Cs = Vec3f(1,1,1); break;
-          case 5: Ca = Vec3f(10,10,10); break;
         }
         
         //what to do if we've hit an emmissive surface?  We could just pretend we're a light and return radiance.
         //or accumulate radiance and add it
+
+        //if we hit a light and this is a camera ray
 
         //do shading
         //direct lighting
@@ -250,7 +262,7 @@ void shadeworker(int tid)
         TRay rayToLight(tray.pdf,tray.depth+1,P+N*0.0001,lightVec.normalize());
 
         //calculate radiance here and pass it to be added if ray hits?
-        Vec3f rad = ps.t * ((color_light * Cs * N.dot(rayToLight.d))+Ca) * M_1_PI; //separate PDF
+        Vec3f rad = ps.t * ((color_light * Cs * N.dot(rayToLight.d))) * M_1_PI; //separate PDF
 
         thisSampleTime = tmr.elapsed();
         totalSampleTime+=thisSampleTime;
@@ -263,6 +275,7 @@ void shadeworker(int tid)
         shadpk.pack(len);
         shadpk.pack(rad);
 
+        /* turn off direct lighting
         shadBatch++;
         if(shadBatch == msgBatchSize)
         {
@@ -270,12 +283,13 @@ void shadeworker(int tid)
           shadss.clear();
           shadBatch=0;
         }
-
+        */
         thisPacketTime = tmr.elapsed();
         totalPacketsOutTime+=thisPacketTime;
         tmr.reset();
         
         //indirect ray
+  
         float pdf = 1;
         Vec3f out_dir;
         index++;
@@ -283,8 +297,11 @@ void shadeworker(int tid)
         float ry = sobol::sample(index+ps.o,1);
         Sampling::sample_cosine_hemisphere(N, rx, ry, out_dir, pdf);
 
-        Vec3f t = Vec3f(ps.t.x,ps.t.y,ps.t.z);
-        t *= Cs * tray.pdf;
+        Vec3f t = Vec3f(ps.t.x,ps.t.y,ps.t.z); //accumulated trnsmittance for the sample, not including this bounce
+        Vec3f r = Vec3f(ps.r.x,ps.r.y,ps.r.z); //current accumulated radiance for this sample
+        r += Ca * t; //add radiance from current emmission if any
+        t *= Cs * tray.pdf; //update transmittance with effect of this bounce
+        ps.r = r;
 
         //russian roulette
         float p = std::max(t.x,std::max(t.y,t.z));
@@ -294,9 +311,24 @@ void shadeworker(int tid)
           thisSampleTime += tmr.elapsed();
           totalSampleTime+=thisSampleTime;          
           tmr.reset();
+          //need to write accumulated radiance to the radiance buffer
+          radpk.pack(ps);
+          radpk.pack(ps.r);
+          radpk.pack(tray.depth);
+
+          radBatch++;
+          if(radBatch==msgBatchSize)
+          {
+            cerr<<"publishing from rr: "<< radss.size()<< endl;
+            ex->Publish(radss.data(),radss.size(),radiancequeue);
+            radss.clear();
+            radBatch=0;
+          }
+          
           continue; //need some kind of signal to say we've stopped.  Could just write 0 rad to radiance buffer?
         }
         t *= 1/p;
+        r *= 1/p;
 
         TRay ray(P+N*0.0001,out_dir.normalize());
         ray.depth = tray.depth+1;
@@ -304,6 +336,7 @@ void shadeworker(int tid)
        // ray.pdf = std::max(N.normalize().dot(out_dir.normalize()), 0.000000f) * M_1_PI;
 
         ps.t = t;
+       // ps.r = r;
 
         thisSampleTime += tmr.elapsed();
         totalSampleTime+=thisSampleTime;
@@ -389,8 +422,6 @@ int  shadeMessageHandler( AMQPMessage * message  )
       pac.next(oh);
       oh.get().convert(Cs); 
       pac.next(oh);
-      oh.get().convert(Rad);
-      pac.next(oh;)
       oh.get().convert(materialid);
 
       shadeworkqueue.push( ShadeJob(ps,P,N,tray,materialid));
