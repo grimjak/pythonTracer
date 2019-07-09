@@ -34,11 +34,11 @@ while True:
 
 channel = connection.channel()
 
-w = 64
-h = 48
+w = 256
+h = 192
 M_PI = 3.14159265358979323846
 M_INVPI = 1/ M_PI
-msgBatchSize = 20
+msgBatchSize = 96
 
 influxclient = InfluxDBClient(influxhost, port, user, password, dbname)
 
@@ -127,66 +127,54 @@ def setup_writer():
                 i = h-ps[3]-1
                 j = ps[2]
                 iteration = ps[1]-1
-
-                if not np.isnan(imgbuffer[i,j,iteration]) :
+                if not np.isnan(imgbuffer[i,j,iteration,0]) :
                     print(i,j,iteration,imgbuffer[i,j,iteration],rad)
                     dupcount += 1
                     print ("shouldn't have duplication", str(dupcount))
                 #imgbuffer[i,j].append(rad)
-                imgbuffer[i,j,iteration] = rad[0]
+                imgbuffer[i,j,iteration] = rad
                 #if iteration > imgbufferSamples[i,j]:
                 #    imgbufferSamples[i,j] = iteration
                 pixelCount += 1
                 framecount += 1
+                totalCount+=1
 
-            '''
-            for b in range(msgBatchSize):
-                ps = unpacker.unpack()
-                rad = np.array(unpacker.unpack())
-                depth = unpacker.unpack()
-                weights[h-ps[3]-1,ps[2]] = ps[1]
-                if (depth == 1): 
-                    #weights[h-ps[3]-1,ps[2]] = ps[1] #this doesn't work anymore as we could get here from russion roulette or any ray miss
-                    totalCount+=1
-                    framecount+=1
-                    pixelCount+=1
-                img[h-ps[3]-1,ps[2]] += rad
-                if rad.max() < (mins[h-ps[3]-1,ps[2]]).max() : mins[h-ps[3]-1,ps[2]] = rad
-                if rad.max() > (maxs[h-ps[3]-1,ps[2]]).max() : maxs[h-ps[3]-1,ps[2]] = rad
-            '''
-
-            if time.perf_counter()-start > 12 and pixelCount > 0: 
-                MySeriesHelper(server_name='renderwriter', samplesWritten=count, percentComplete=totalCount / (w*h*samples), pixelsPerSecond=pixelCount/(time.perf_counter()-start))
+            if time.perf_counter()-start > 1 and pixelCount > 0: 
+                MySeriesHelper(server_name='renderwriter', samplesWritten=totalCount, percentComplete=totalCount / (w*h*samples), pixelsPerSecond=pixelCount/(time.perf_counter()-start))
                 MySeriesHelper.commit()
                 
                 print("120s elapsed, writing")
                 #build output image from buffer                
-                outimg = np.nanmean(imgbuffer,axis=2)
+                outimg = np.nanmean(imgbuffer,axis=2).clip(0,1)
+                print("mean")
                 outimg = np.power(outimg,1.0/2.2)
-                outimg = np.squeeze(np.stack((outimg,)*3, axis=-1)) #add back in the missing colour axes
+                #outimg = np.squeeze(np.stack((outimg,)*3, axis=-1)) #add back in the missing colour axes
+                print("gamma and avg")
 
-                Image.fromarray((256*outimg).astype(np.uint8)).save("static/tmp{}.png".format(frame))
+                outimg = (255.0*outimg).astype(np.uint8)
+                print("types")
+
+                Image.fromarray(outimg).save("static/tmp_512x384_{}.png".format(frame), mode='RGB')
+                print("written")
+
                 start = time.perf_counter()
                 pixelCount = 0
-                if framecount > w*h*samples*(frame*0.1) :
-                    frame += 1
-                    framecount = 0
-
+         #       if framecount > w*h*((float)(frame*frame)*0.05) :
+         #           frame += 1
+         #           framecount = 0
         #var = maxs-mins
         #imsave('var.png', var.clip(0,1))
-
+        print("out of message loop", str(count))
     # Cancel the consumer and return any pending messages
     requeued_messages = channel.cancel()
 
 samples = 1024
-filterwidth = 2.0
-
 
 img = np.zeros((h, w, 3))
 #imgbuffer = ma.masked_all((h,w,samples,1))
 #imgbuffer.soften_mask()
-#imgbuffer = np.zeros((h,w,samples,3))
-imgbuffer = np.empty((h,w,samples,1))
+imgbuffer = np.zeros((h,w,samples,3))
+#imgbuffer = np.empty((h,w,samples,1))
 imgbuffer.fill(np.nan)
 
 weights = np.ones((h,w,1))

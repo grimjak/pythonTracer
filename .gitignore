@@ -9,3 +9,4 @@ visualiser.tar
 static
 sessions
 grafana.db
+*.tar

@@ -64,7 +64,7 @@ int numPacketsIn = 0;
 int numPacketsOut = 0;
 float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
-unsigned int msgBatchSize = 20;
+unsigned int msgBatchSize = 96;
 
 
 
@@ -238,7 +238,7 @@ void shadeworker(int tid)
         {
           case 0: Cs = Vec3f(0,0.15,1); Ca = Vec3f(0,0,0); break;
           case 1: Cs = Vec3f(0,1,0); Ca = Vec3f(0,0,0); break;
-          case 2: Cs = Vec3f(1,1,1); Ca = Vec3f(200000,200000,200000); break;
+          case 2: Cs = Vec3f(1,1,1); Ca = Vec3f(50,50,50); break;
           case 3: Cs = Vec3f(1,0,0); Ca = Vec3f(0,0,0); break;
           case 4: Cs = Vec3f(1,1,1); break;
         }
@@ -299,15 +299,18 @@ void shadeworker(int tid)
 
         Vec3f t = Vec3f(ps.t.x,ps.t.y,ps.t.z); //accumulated trnsmittance for the sample, not including this bounce
         Vec3f r = Vec3f(ps.r.x,ps.r.y,ps.r.z); //current accumulated radiance for this sample
-        r += Ca * t; //add radiance from current emmission if any
         t *= Cs * tray.pdf; //update transmittance with effect of this bounce
+        r += Ca * t; //add radiance from current emmission if any
         ps.r = r;
 
         //russian roulette
-        float p = std::max(t.x,std::max(t.y,t.z));
+        Vec3f tr = t+r;
+        //float p = std::max(tr.x,std::max(tr.y,tr.z));
+        float p = 1; //turn off 
         index++;
         if(p < sobol::sample(index,0))
         {
+          cerr<<"russian roulette"<<endl;
           thisSampleTime += tmr.elapsed();
           totalSampleTime+=thisSampleTime;          
           tmr.reset();
@@ -348,6 +351,7 @@ void shadeworker(int tid)
 
         rayBatch++;
         if(rayBatch==msgBatchSize)
+        //if((rayBatch==msgBatchSize) && (ray.depth < 0))
         {
           ex->Publish(rayss.data(),rayss.size(),rayqueue);
           rayss.clear();

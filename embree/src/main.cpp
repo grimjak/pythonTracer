@@ -51,6 +51,10 @@ private:
 };
 
 int numRays = 0;
+int numHits = 0;
+int numMisses = 0;
+
+
 float totalRayTime = 0;
 int numPacketsIn = 0;
 int numPacketsOut = 0;
@@ -58,7 +62,7 @@ float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
 int rayHist[11];
 unsigned int rayDepth;
-unsigned int msgBatchSize = 20;
+unsigned int msgBatchSize = 96;
 
 /* scene data */
 RTCDevice g_device = nullptr;
@@ -242,6 +246,8 @@ void rayworker(int tid)
         tray = rj.tray;
         rayHist[tray.depth]++;
 
+        //
+
         /*intersect ray with scene*/
         RTCIntersectContext context;
         rtcInitIntersectContext(&context);
@@ -250,7 +256,9 @@ void rayworker(int tid)
         //if we've got an intersection add to shade queue
         //ps, P, N, ray, Cs
         if (ray.geomID != RTC_INVALID_GEOMETRY_ID)
+        //if ((ray.geomID != RTC_INVALID_GEOMETRY_ID) && (tray.depth < 3))
         {
+            numHits++;
             Vec3f P = ray.org + ray.tfar*ray.dir;
             Vec3f N = normalize(ray.Ng);
             unsigned int materialid = materialids[ray.geomID][ray.primID];
@@ -281,11 +289,13 @@ void rayworker(int tid)
             thisPacketTime = tmr.elapsed();
             totalPacketsOutTime += thisPacketTime;
         } else {
+            numMisses++;
             //write a miss to the radiance queue? Call shade again in a mode that just writes the radiance?  
             thisRayTime = tmr.elapsed();
             totalRayTime += thisRayTime;
             radpk.pack(ps);
-            radpk.pack(ps.r);
+            //radpk.pack(ps.r);
+            radpk.pack(Vec3f(0.18,0.18,0.18)*ps.t+ps.r);
             radpk.pack(tray.depth);
 
             radBatch++;
@@ -305,6 +315,8 @@ void rayworker(int tid)
           .tag("name", "totalRays")
           .tag("hostname", hostname)
           .field("numrays", numRays)
+          .field("numhits", numHits)
+          .field("nummisses", numMisses)
           .field("totalRayTime", totalRayTime)
           .field("raysPerSecond", 1.0 / thisRayTime)
 
@@ -607,7 +619,7 @@ int rayMessageHandler( AMQPMessage * message  )
 	char * data = message->getMessage(&j);
   cerr << "received: " << j << endl;
 
-	if (data)
+	if ((data) && (j>0))
   {
     msgpack::unpacker pac;
     pac.reserve_buffer(j);

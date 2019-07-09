@@ -37,7 +37,7 @@
 #include <random>
 #include "sobol.h"
 
-#define FILTER_TABLE_SIZE 1024
+#define FILTER_TABLE_SIZE 4096
 
 using namespace std;
 //using namespace rapidjson;
@@ -64,12 +64,12 @@ int numPacketsIn = 0;
 int numPacketsOut = 0;
 float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
-unsigned int msgBatchSize = 20;
+unsigned int msgBatchSize = 96;
 
 
 static Vec3f O = Vec3f(274,274,-440);
-static int w = 64;
-static int h = 48;
+static int w = 256;
+static int h = 192;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
 static int samples = 1024;
@@ -209,18 +209,26 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
   float thisRayTime = 0;
   float thisPacketTime = 0;
   unsigned int batch = 0;
-
+  cerr<<"iteration: "<<iteration<<endl;
   for (int idx = 0; idx<w*h; idx++)
   {
-      int j = indices[idx] / w;
-      int i = indices[idx] - (j*w);
+      int j = (int)((float)indices[idx] / (float)w);
+      int i = (int)((float)indices[idx] - ((float)j*(float)w));
+
+      //int j = (int)((float)idx/(float)w);
+      //int i = (int)((float)idx-((float)j*(float)w));
+
       numRays++;
       tmr.reset();
-      float rx = sobol::sample(++index,1);
-      float ry = sobol::sample(index,2);
-      float offset = offsets[j*w+i];
-      rx = (rx+offset);if (rx > 1) rx-=1;
-      ry = (ry+offset);if (ry > 1) ry-=1;
+      float rx = sobol::sample(iteration,1,idx);
+      float ry = sobol::sample(iteration,2,idx);
+
+      //float rx = sobol::sample(++index,1);
+      //float ry = sobol::sample(index,2);
+
+      //float offset = offsets[j*w+i];
+      //rx = (rx+offset);if (rx > 1) rx-=1;
+      //ry = (ry+offset);if (ry > 1) ry-=1;
 
       rx = (*filter_table)[int(rx*FILTER_TABLE_SIZE-1)];
       ry = (*filter_table)[int(ry*FILTER_TABLE_SIZE-1)];
@@ -232,7 +240,7 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
       x += rx/w;
       y += ry/w;
       TRay r = generateSample(x,y);
-      int o = rand()%(256);
+      int o = rand()%(4096);
 
       PixelSample ps = PixelSample(o,iteration+1,i,j,Vec3f(1,1,1),Vec3f(0,0,0));
       thisRayTime = tmr.elapsed();
@@ -254,7 +262,7 @@ void iterate(int &index, int iteration,float *offsets, vector<float> *filter_tab
       thisPacketTime = tmr.elapsed();
       totalPacketsOutTime+= thisPacketTime;
     
-      if ((numRays%1000 == 0) && (numRays > 0))
+      if ((numRays%1000 == 0) && (numRays > 0)) //change this to be time based or we miss data
       {
         int success = influxdb_cpp::builder()
           .meas("raygenerator")
