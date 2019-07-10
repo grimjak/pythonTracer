@@ -5,13 +5,9 @@ rendercontrol.tar
 renderwriter.tar
 shadeserver.tar
 visualiser.tar
-<<<<<<< HEAD
-
-sessions
-*.png
-=======
 static
 sessions
 grafana.db
 *.tar
->>>>>>> 9f37655dffb2d9600a6f4ceef79335da0666a3c3
+.vscode
+*.png
