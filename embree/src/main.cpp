@@ -16,7 +16,6 @@
 
 #include <tbb/concurrent_queue.h>
 
-
 #include "obj_loader.h"
 #define EMBREE
 #include "messaging.h"
@@ -70,7 +69,6 @@ RTCScene g_scene = nullptr;
 std::vector<std::vector<unsigned int>> materialids;
 
 
-
 const int numPhi = 64;
 const int numTheta = 2*numPhi;
 
@@ -103,6 +101,7 @@ typedef struct OcclusionJob {
 
 concurrent_bounded_queue<RayJob> rayworkqueue;
 concurrent_bounded_queue<OcclusionJob> occlusionworkqueue;
+
 
 
 /* adds a sphere to the scene */
@@ -597,7 +596,6 @@ void setup_obj_scene()
       vertices[v].y = attrib.vertices[v*3+1];
       vertices[v].z = attrib.vertices[v*3+2];
     }
-
     rtcCommitGeometry(geom);
     unsigned int geomID = rtcAttachGeometry(g_scene,geom);
     rtcReleaseGeometry(geom);
@@ -688,6 +686,13 @@ int  occlusionMessageHandler( AMQPMessage * message  )
 
       occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
     }
+  }
+  totalPacketsInTime += tmr.elapsed();
+  if (numPacketsIn%10000 == 0)
+  {
+    std::cout<<"total packets in: "<<numPacketsIn<<endl;
+    std::cout<<"total time: "<<totalPacketsInTime << endl;
+    std::cout<<"packets in / sec: "<<numPacketsIn / totalPacketsInTime << endl;
   }
   totalPacketsInTime += tmr.elapsed();
   if (numPacketsIn%10000 == 0)
