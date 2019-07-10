@@ -14,17 +14,18 @@ import json
 
 from flask import Flask
 from flask import send_file
+from flask import render_template
 from flask_socketio import SocketIO, emit
 
 import pika
 
-import ghalton
+
 
 app = Flask(__name__)
 
 @app.route('/')
-def hello_world():
-    return 'test2 app'
+def files(filename):
+    return filename
 
 while True:
     try:
@@ -43,35 +44,8 @@ h = 480
 M_PI = 3.14159265358979323846
 M_INVPI = 1/ M_PI
 
-
 stopped = False
 quit = False
-
-class Ray():
-    def __init__(self, O=np.zeros(3), D=np.zeros(3), PDF=1, depth=0):
-        self.o = O
-        self.d = D
-        self.pdf = 1.0
-        self.depth = 0
-        return
-    def to_dict(self):
-        return {'o':self.o.tolist(),'d':self.d.tolist(),'pdf':self.pdf,'depth':self.depth}
-    def from_dict(self,dict):
-        self.o = np.array(dict['o'])
-        self.d = np.array(dict['d'])
-        self.pdf = dict['pdf']
-        self.depth = dict['depth']
-
-
-class Sampler():
-    def __init__(self,size):
-        self.size = size
-        self.index = random.randrange(1,size)
-        self.sequencer = ghalton.Halton(2) #2D set of LDN
-        self.points = self.sequencer.get(size)
-    def sample2d(self,offset=0):
-        self.index += 1
-        return self.points[(self.index+offset)%self.size]
 
 class PixelSample():
     def __init__(self,x=0,y=0,t=np.ones(3),o=0,w=1):
@@ -99,66 +73,11 @@ class QueueWrapper():
     def put(self,data):
         channel.basic_publish(exchange='ptex',routing_key=self.key,body=json.dumps(data))
 
-def normalize(x):
-    x /= np.linalg.norm(x)
-    return x
-
-def sample(ps,ray):
- #   trace_camera_ray(ps,ray,smp)
-    jsonmessage = {'ray':ray.to_dict(),'ps':ps.to_dict()}
-    #camerarayqueue.put(jsonmessage)
-    rayqueue.put(jsonmessage)
-
-
-def render_scene():
-    #bin rays based on direction (and origin?)
-    #go through rays in ordered batches producing a list of hit points
-    #shade hit points, secondary rays are fed back into ray bins
-
-    col = np.zeros(3)  # Current color.
-    Q = np.array([0., 0., 0.])  # Camera pointing to.
-
-    # Loop through all pixels.
-    for s in range(samples):   
-        for i, x in enumerate(np.linspace(S[0], S[2], w)):
-            if i % 10 == 0:
-                print (i / float(w) * 100, "%")
-            for j, y in enumerate(np.linspace(S[1], S[3], h)):
-                offsetu = filterwidth * smp.sample2d()[0] - (filterwidth/2.0)
-                offsetv = filterwidth * smp.sample2d()[1] - (filterwidth/2.0)
-                print(x,y,offsetu,offsetv)
-               # Q[:2] = (x+(offsetu-(filterwidth/2.0))/w, y+(offsetv-(filterwidth/2.0))/h)
-               # Q[:2] = (x+(offsetu-(filterwidth/2.0)/w), y+(offsetv-(filterwidth/2.0)/h))
-                Q[:2] = (x+offsetu/w,y+offsetv/h)
-                D = normalize(Q - O)
-                ray = Ray(O, D)
-
-                ps = PixelSample(i,j,o=random.randint(0,256),w=s+1)
-                #weights[h-j-1,i] += 1 
-                sample(ps,ray)
-
-
-                if stopped:
-                    break
-
-                if quit:
-                    exit()
-
 @app.route('/render')  
 def startRender():
     print("render")
 
-    print("start render")
-  #  render_scene()
-    if not t.is_alive():
-        print("starting render")
-        t.start()
-    else:
-        stopped = True
-        t.join()
-        t.start()
-
-    return 'render started'
+    return render_template('renderTemplate.html',name="test")
 
     #outstring = io.BytesIO()
     #img = np.clip(img,0,1)
@@ -166,34 +85,22 @@ def startRender():
    ## outstring.seek(0)
   #  return send_file(outstring, attachment_filename='test.png',mimetype='image/png')
 
-cameraray_threads = 1
-ray_threads = 1
-shade_threads = 1
-occlusion_threads = 1
+@app.route('/renders/<filename>')
+def render_file(filename):
+    return filename
+
 depth_max = 4  # Maximum number of light reflections.
 samples = 16
 filterwidth = 6.0
-smp = Sampler(w*h*samples)
-
-t = Thread(target = render_scene)
-
 
 O = np.array([0., 0.35, -1.])  # Camera.
 
 r = float(w) / h
-# Screen coordinates: x0, y0, x1, y1.
-S = (-1., -1. / r + .25, 1., 1. / r + .25)
-
-camerarayqueue =  QueueWrapper('camerarayqueue')
-rayqueue = QueueWrapper('rayqueue')
-shadequeue = QueueWrapper('shadequeue')
-occlusionqueue = QueueWrapper('occlusionqueue')
 
 radiancequeue = QueueWrapper('radiancequeue')
 
 
 if __name__ == '__main__':
     print (sys.argv)
-    if sys.argv[-1] == "control":    
-        #run the rest server an wait for commands
-        app.run(debug=True,host='0.0.0.0')
+    #run the rest server an wait for commands
+    app.run(debug=True,host='0.0.0.0')

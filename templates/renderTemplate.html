@@ -1,0 +1,9 @@
+<!doctype html>
+<title>Hello from Flask</title>
+<script>
+setInterval(function() {
+  var myImageElement = document.getElementById('renderImg');
+  myImageElement.src = "{{url_for('static', filename='tmp.png')}}?rand=" + Math.random();
+}, 5000);
+</script>
+  <img src="{{url_for('static', filename='tmp.png')}}" id="renderImg" />
