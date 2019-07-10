@@ -22,7 +22,6 @@ RUN apt-get update \
                         libcpprest-dev \
                         linux-tools-generic
 
-
 RUN \
 	rm -rf rabbitmq-c && \
 	git clone https://github.com/alanxz/rabbitmq-c.git && \
