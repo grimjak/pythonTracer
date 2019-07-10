@@ -18,9 +18,7 @@ RUN apt-get update \
                         libtbb-dev \
                         cmake-curses-gui \
                         freeglut3-dev \
-                        libxmu-dev libxi-dev \
-                        libcpprest-dev \
-                        linux-tools-generic
+                        libxmu-dev libxi-dev
 
 RUN \
 	rm -rf rabbitmq-c && \
@@ -41,13 +39,6 @@ RUN \
   make && \
   cp libamqpcpp.a /usr/local/lib
 
-RUN \
-  rm -rf msgpack-c && \
-  git clone https://github.com/msgpack/msgpack-c.git && \
-  cd msgpack-c && \
-  cmake -DMSGPACK_CXX11=ON . && \
-  make install && \
-  cd / && rm -rf msgpack-c
 
 USER root
 WORKDIR /app
@@ -71,14 +62,12 @@ RUN \
   export PATH=/app/clang_6.0.0/bin:$PATH && cd embree && mkdir build && cd build && cmake -DEMBREE_ISPC_SUPPORT=OFF -DEMBREE_TUTORIALS=OFF -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang EMBREE_MAX_ISA=AVX .. && make
 
 RUN \
-  git clone https://github.com/orca-zhang/influxdb-cpp.git && \
-  ls && \
-  cp influxdb-cpp/influxdb.hpp /usr/local/include
+  mkdir tmp && \
+  cd tmp && \ 
+  git clone https://github.com/Tencent/rapidjson.git && \
+  cp -rf rapidjson/include /app/include
 
-
-
-COPY ./embree /app
-COPY ./common /common
+COPY . /app
 
 #RUN /bin/bash -c "source embree/embree-vars.sh && make VERBOSE=1"
 WORKDIR /app
