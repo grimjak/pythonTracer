@@ -34,11 +34,11 @@ while True:
 
 channel = connection.channel()
 
-w = 256
-h = 192
+w = 512
+h = 288
 M_PI = 3.14159265358979323846
 M_INVPI = 1/ M_PI
-msgBatchSize = 96
+msgBatchSize = 144
 
 influxclient = InfluxDBClient(influxhost, port, user, password, dbname)
 
@@ -159,9 +159,9 @@ def setup_writer():
 
                 start = time.perf_counter()
                 pixelCount = 0
-         #       if framecount > w*h*((float)(frame*frame)*0.05) :
-         #           frame += 1
-         #           framecount = 0
+                if framecount > w*h*((float)(frame*frame)*0.05) :
+                    frame += 1
+                    framecount = 0
         #var = maxs-mins
         #imsave('var.png', var.clip(0,1))
         print("out of message loop", str(count))

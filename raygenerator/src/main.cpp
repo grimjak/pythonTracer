@@ -64,12 +64,12 @@ int numPacketsIn = 0;
 int numPacketsOut = 0;
 float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
-unsigned int msgBatchSize = 96;
+unsigned int msgBatchSize = 144;
 
 
 static Vec3f O = Vec3f(274,274,-440);
-static int w = 256;
-static int h = 192;
+static int w = 512;
+static int h = 288;
 static float r = (float)w/(float)h;
 static float filterwidth = 6.0;
 static int samples = 1024;

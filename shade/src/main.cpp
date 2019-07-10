@@ -64,7 +64,7 @@ int numPacketsIn = 0;
 int numPacketsOut = 0;
 float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
-unsigned int msgBatchSize = 96;
+unsigned int msgBatchSize = 144;
 
 
 

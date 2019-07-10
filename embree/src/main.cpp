@@ -62,7 +62,7 @@ float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
 int rayHist[11];
 unsigned int rayDepth;
-unsigned int msgBatchSize = 96;
+unsigned int msgBatchSize = 144;
 
 /* scene data */
 RTCDevice g_device = nullptr;
