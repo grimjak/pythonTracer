@@ -18,9 +18,7 @@ RUN apt-get update \
                         libtbb-dev \
                         cmake-curses-gui \
                         freeglut3-dev \
-                        libxmu-dev libxi-dev \
-                        libcpprest-dev \
-                        linux-tools-generic
+                        libxmu-dev libxi-dev
 
 RUN \
 	rm -rf rabbitmq-c && \
