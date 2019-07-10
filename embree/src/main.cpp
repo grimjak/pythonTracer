@@ -646,6 +646,8 @@ int main(int argc, char *argv[])
 #include <influxdb.hpp>
 
 #include <netdb.h>
+#include <unistd.h>
+#include <limits.h>
 
 
 //using namespace AmqpClient;
@@ -669,6 +671,10 @@ private:
 };
 
 int numRays = 0;
+int numHits = 0;
+int numMisses = 0;
+
+
 float totalRayTime = 0;
 int numPacketsIn = 0;
 int numPacketsOut = 0;
@@ -676,6 +682,7 @@ float totalPacketsInTime = 0;
 float totalPacketsOutTime = 0;
 int rayHist[11];
 unsigned int rayDepth;
+unsigned int msgBatchSize = 144;
 
 /* scene data */
 RTCDevice g_device = nullptr;
@@ -713,8 +720,9 @@ typedef struct OcclusionJob {
   {};
 } OcclusionJob;
 
-concurrent_queue<RayJob> rayworkqueue;
-concurrent_queue<OcclusionJob> occlusionworkqueue;
+concurrent_bounded_queue<RayJob> rayworkqueue;
+concurrent_bounded_queue<OcclusionJob> occlusionworkqueue;
+
 
 
 /* adds a sphere to the scene */
@@ -812,6 +820,10 @@ void rayworker(int tid)
 
     std::string host ="rabbitmq";
     std::string shadequeue = "shadequeue";
+    std::string radiancequeue = "radiancequeue";
+
+    char hostname[HOST_NAME_MAX];
+    gethostname(hostname, HOST_NAME_MAX);
 
     AMQP amqp(host);
     AMQPExchange *ex = amqp.createExchange("ptex");
@@ -821,9 +833,16 @@ void rayworker(int tid)
 		queue->Declare();
 		queue->Bind( "ptex", shadequeue);
 
+    AMQPQueue * queue2 = amqp.createQueue(radiancequeue);
+		queue2->Declare();
+		queue2->Bind( "ptex", radiancequeue);
+
     cout << "ray worker: " << tid << " started" << endl;
     msgpack::sbuffer ss;
     msgpack::packer<msgpack::sbuffer> pk(&ss);
+
+    msgpack::sbuffer radss;
+    msgpack::packer<msgpack::sbuffer> radpk(&radss);
 
     hostent * record = gethostbyname("influxdb");
     in_addr * address = (in_addr * )record->h_addr;
@@ -832,9 +851,13 @@ void rayworker(int tid)
     Timer tmr;
     float thisRayTime = 0;
     float thisPacketTime = 0;
+    unsigned int batch = 0;
+    unsigned int radBatch = 0;
+
     while(true)
     {
-      if (rayworkqueue.try_pop(rj))
+  //    if (rayworkqueue.try_pop(rj))
+      rayworkqueue.pop(rj);   
       {
         numRays++;
         tmr.reset();
@@ -842,6 +865,8 @@ void rayworker(int tid)
         ps = rj.ps;
         tray = rj.tray;
         rayHist[tray.depth]++;
+
+        //
 
         /*intersect ray with scene*/
         RTCIntersectContext context;
@@ -851,11 +876,14 @@ void rayworker(int tid)
         //if we've got an intersection add to shade queue
         //ps, P, N, ray, Cs
         if (ray.geomID != RTC_INVALID_GEOMETRY_ID)
+        //if ((ray.geomID != RTC_INVALID_GEOMETRY_ID) && (tray.depth < 3))
         {
+            numHits++;
             Vec3f P = ray.org + ray.tfar*ray.dir;
             Vec3f N = normalize(ray.Ng);
             unsigned int materialid = materialids[ray.geomID][ray.primID];
             Vec3f Cs(1,1,1);
+            Vec3f Rad(0,0,0);
 
             thisRayTime = tmr.elapsed();
             totalRayTime += thisRayTime;
@@ -864,19 +892,40 @@ void rayworker(int tid)
             numPacketsOut++;
 
             pk.pack(ps);
-            pk.pack(tray);
+            pk.pack(tray);  
             pk.pack(P);
             pk.pack(N);
             pk.pack(Cs);
             pk.pack(materialid);
 
-            ex->Publish(ss.data(),ss.size(),shadequeue);
-            ss.clear();
+            batch++;
+            if(batch==msgBatchSize)
+            {
+              ex->Publish(ss.data(),ss.size(),shadequeue);
+              ss.clear();
+              batch = 0;
+            }
+
             thisPacketTime = tmr.elapsed();
             totalPacketsOutTime += thisPacketTime;
         } else {
+            numMisses++;
+            //write a miss to the radiance queue? Call shade again in a mode that just writes the radiance?  
             thisRayTime = tmr.elapsed();
             totalRayTime += thisRayTime;
+            radpk.pack(ps);
+            //radpk.pack(ps.r);
+            radpk.pack(Vec3f(0.18,0.18,0.18)*ps.t+ps.r);
+            radpk.pack(tray.depth);
+
+            radBatch++;
+            if(radBatch==msgBatchSize)
+            {
+              cerr<<"publishing from ray miss: "<< radss.size()<< endl;
+              ex->Publish(radss.data(),radss.size(),radiancequeue);
+              radss.clear();
+              radBatch=0;
+            }
         }
 
         if ((numRays%1000 == 0) && (numRays > 0))
@@ -884,51 +933,65 @@ void rayworker(int tid)
         int success = influxdb_cpp::builder()
           .meas("rayserver")
           .tag("name", "totalRays")
+          .tag("hostname", hostname)
           .field("numrays", numRays)
+          .field("numhits", numHits)
+          .field("nummisses", numMisses)
           .field("totalRayTime", totalRayTime)
           .field("raysPerSecond", 1.0 / thisRayTime)
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "0")
           .field("count",rayHist[0])
 
           .meas("raydepth")
-          .tag("depth", "1")
+          .tag("hostname", hostname)
+          .tag("depth", "01")
           .field("count",rayHist[1])
 
           .meas("raydepth")
-          .tag("depth", "2")
+          .tag("hostname", hostname)
+          .tag("depth", "02")
           .field("count",rayHist[2])
 
           .meas("raydepth")
-          .tag("depth", "3")
+          .tag("hostname", hostname)
+          .tag("depth", "03")
           .field("count",rayHist[3])
 
           .meas("raydepth")
-          .tag("depth", "4")
+          .tag("hostname", hostname)
+          .tag("depth", "04")
           .field("count",rayHist[4])
 
           .meas("raydepth")
-          .tag("depth", "5")
+          .tag("hostname", hostname)
+          .tag("depth", "05")
           .field("count",rayHist[5])
 
           .meas("raydepth")
-          .tag("depth", "6")
+          .tag("hostname", hostname)
+          .tag("depth", "06")
           .field("count",rayHist[6])
 
           .meas("raydepth")
-          .tag("depth", "7")
+          .tag("hostname", hostname)
+          .tag("depth", "07")
           .field("count",rayHist[7])
 
           .meas("raydepth")
-          .tag("depth", "8")
+          .tag("hostname", hostname)
+          .tag("depth", "08")
           .field("count",rayHist[8])
 
           .meas("raydepth")
-          .tag("depth", "9")
+          .tag("hostname", hostname)
+          .tag("depth", "09")
           .field("count",rayHist[9])
 
           .meas("raydepth")
+          .tag("hostname", hostname)
           .tag("depth", "10")
           .field("count",rayHist[10])                    
           .post_http(si);
@@ -937,6 +1000,7 @@ void rayworker(int tid)
         {
         int success = influxdb_cpp::builder()
           .meas("rayserver")
+          .tag("hostname", hostname)
           .tag("name", "totalPacketsOut")
           .field("num", numPacketsOut)
           .field("totalTime", totalPacketsOutTime)
@@ -958,6 +1022,9 @@ void occlusionworker(int tid)
     std::string host ="rabbitmq";
     std::string radiancequeue = "radiancequeue";
 
+    char hostname[HOST_NAME_MAX];
+    gethostname(hostname, HOST_NAME_MAX);
+
     AMQP amqp(host);
     AMQPExchange *ex = amqp.createExchange("ptex");
     ex->Declare("ptex","direct");
@@ -978,9 +1045,11 @@ void occlusionworker(int tid)
     msgpack::packer<msgpack::sbuffer> pk(&ss);
     float thisRayTime = 0;
     float thisPacketTime = 0;
+    unsigned int batch = 0;
     while(true)
     {
-      if (occlusionworkqueue.try_pop(rj))
+      occlusionworkqueue.pop(rj);
+    //  if (occlusionworkqueue.try_pop(rj))      
       {
         numRays++;
         tmr.reset();
@@ -1004,11 +1073,17 @@ void occlusionworker(int tid)
           tmr.reset();
 
           pk.pack(ps);
-          pk.pack(rad);
+          pk.pack(rad+ps.r); //calculated radiance for light plus accumulated radiance along ray
           pk.pack(tray.depth);
 
-          ex->Publish(ss.data(),ss.size(),radiancequeue);
-          ss.clear();
+          batch++;
+          if(batch==msgBatchSize)
+          {
+            cerr<<"publishing from occl: "<< ss.size()<< endl;
+            ex->Publish(ss.data(),ss.size(),radiancequeue);
+            ss.clear();
+            batch=0;
+          }
           thisPacketTime = tmr.elapsed();
           totalPacketsOutTime += thisPacketTime;
         } else {
@@ -1016,11 +1091,17 @@ void occlusionworker(int tid)
           tmr.reset();
           
           pk.pack(ps);
-          pk.pack(Vec3f(0,0,0));
+          pk.pack(Vec3f(0,0,0)); 
           pk.pack(tray.depth);
 
-          ex->Publish(ss.data(),ss.size(),radiancequeue);
-          ss.clear();
+          if(batch==msgBatchSize)
+          {
+            cerr<<"publishing: "<< ss.size()<< endl;
+            ex->Publish(ss.data(),ss.size(),radiancequeue);
+            ss.clear();
+            batch=0;
+          }     
+
           thisPacketTime = tmr.elapsed();
           totalPacketsOutTime += thisPacketTime;
         }
@@ -1029,6 +1110,7 @@ void occlusionworker(int tid)
         {
         int success = influxdb_cpp::builder()
           .meas("occlusionserver")
+          .tag("hostname", hostname)
           .tag("name", "totalRays")
           .field("numrays", numRays)
           .field("totalRayTime", totalRayTime)
@@ -1039,6 +1121,7 @@ void occlusionworker(int tid)
         {
         int success = influxdb_cpp::builder()
           .meas("occlusionserver")
+          .tag("hostname", hostname)
           .tag("name", "totalPacketsOut")
           .field("num", numPacketsOut)
           .field("totalTime", totalPacketsOutTime)
@@ -1073,7 +1156,7 @@ void setup_obj_scene()
   std::vector<tinyobj::material_t> materials;
 
   std::string err;
-  bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, "/usr/src/app/cornell_box.obj",
+  bool ret = tinyobj::LoadObj(&attrib, &shapes, &materials, &err, "/usr/src/app/cornell_box_3.obj",
                               "/usr/src/app/", true);
   if (!err.empty()) {
     std::cerr << err << std::endl;
@@ -1106,7 +1189,6 @@ void setup_obj_scene()
     
     Vertex*   vertices  = (Vertex*  ) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_VERTEX,0,RTC_FORMAT_FLOAT3,sizeof(Vertex),attrib.vertices.size());
     Triangle* triangles = (Triangle*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT3,sizeof(Triangle),shapes[s].mesh.indices.size()/3);
-    //int* materialids = (int*) rtcSetNewGeometryBuffer(geom,RTC_BUFFER_TYPE_INDEX,0,RTC_FORMAT_UINT,sizeof(int),shapes[s].mesh.indices.size()/3);
 
     for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
     {
@@ -1122,7 +1204,6 @@ void setup_obj_scene()
         // Invaid material ID. Use default material.
         current_material_id = materials.size() - 1;  // Default material is added to the last item in `materials`.
       }
-      //cerr<<"mat id:"<<current_material_id<<endl;
       mat_ids.push_back(current_material_id);
       triangles[f].v0 = idx0.vertex_index;
       triangles[f].v1 = idx1.vertex_index;
@@ -1136,15 +1217,6 @@ void setup_obj_scene()
       vertices[v].y = attrib.vertices[v*3+1];
       vertices[v].z = attrib.vertices[v*3+2];
     }
-/*
-    for (size_t f = 0; f < shapes[s].mesh.indices.size() / 3; f++) 
-    {
-      
-      cerr<<vertices[triangles[f].v0].x<<","<<vertices[triangles[f].v0].y<<","<<vertices[triangles[f].v0].z<<endl;
-      cerr<<vertices[triangles[f].v1].x<<","<<vertices[triangles[f].v1].y<<","<<vertices[triangles[f].v1].z<<endl;
-      cerr<<vertices[triangles[f].v2].x<<","<<vertices[triangles[f].v2].y<<","<<vertices[triangles[f].v2].z<<endl;
-    }
-*/
     rtcCommitGeometry(geom);
     unsigned int geomID = rtcAttachGeometry(g_scene,geom);
     rtcReleaseGeometry(geom);
@@ -1164,7 +1236,9 @@ int rayMessageHandler( AMQPMessage * message  )
   Timer tmr;
   numPacketsIn++;
 	char * data = message->getMessage(&j);
-	if (data)
+  cerr << "received: " << j << endl;
+
+	if ((data) && (j>0))
   {
     msgpack::unpacker pac;
     pac.reserve_buffer(j);
@@ -1175,14 +1249,17 @@ int rayMessageHandler( AMQPMessage * message  )
     PixelSample ps;
     TRay tray;
 
-    pac.next(oh);
-    oh.get().convert(ps);
-    pac.next(oh);
-    oh.get().convert(tray);
+    for (int i = 0; i < msgBatchSize; i++)
+    {
+      pac.next(oh);
+      oh.get().convert(ps);
+      pac.next(oh);
+      oh.get().convert(tray);
 
-    Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0,inf);
+      Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0,inf);
 
-    rayworkqueue.push( RayJob(ray,ps,tray));
+      rayworkqueue.push( RayJob(ray,ps,tray));
+    }
 
   }
   totalPacketsInTime += tmr.elapsed();
@@ -1215,18 +1292,28 @@ int  occlusionMessageHandler( AMQPMessage * message  )
     float len;
     Vec3f rad;
 
-    pac.next(oh);
-    oh.get().convert(ps);
-    pac.next(oh);
-    oh.get().convert(tray);
-    pac.next(oh);
-    oh.get().convert(len);
-    pac.next(oh);
-    oh.get().convert(rad);    
+    for (int i = 0; i < msgBatchSize; i++)
+    {
+      pac.next(oh);
+      oh.get().convert(ps);
+      pac.next(oh);
+      oh.get().convert(tray);
+      pac.next(oh);
+      oh.get().convert(len);
+      pac.next(oh);
+      oh.get().convert(rad);    
 
-    Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0001,len);
+      Ray ray(Vec3f(tray.o),Vec3f(tray.d),0.0001,len);
 
-    occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
+      occlusionworkqueue.push( OcclusionJob(ray,ps,tray,rad));
+    }
+  }
+  totalPacketsInTime += tmr.elapsed();
+  if (numPacketsIn%10000 == 0)
+  {
+    std::cout<<"total packets in: "<<numPacketsIn<<endl;
+    std::cout<<"total time: "<<totalPacketsInTime << endl;
+    std::cout<<"packets in / sec: "<<numPacketsIn / totalPacketsInTime << endl;
   }
   totalPacketsInTime += tmr.elapsed();
   if (numPacketsIn%10000 == 0)
@@ -1253,6 +1340,10 @@ int main(int argc, char *argv[])
   } else { 
     cout << "Ray server started" << endl;
   }
+
+  rayworkqueue.set_capacity(msgBatchSize);
+  occlusionworkqueue.set_capacity(msgBatchSize);
+
 
   //added delay for rabbit mq start to avoid failing with socket error
   std::this_thread::sleep_for(std::chrono::milliseconds(10000));
@@ -1284,7 +1375,7 @@ int main(int argc, char *argv[])
     else queue->addEvent(AMQP_MESSAGE, rayMessageHandler);
 		queue->addEvent(AMQP_CANCEL, onCancel );
 
-		queue->Consume(AMQP_NOACK);//
+		queue->Consume(AMQP_NOACK);//is there a batch version of this?
 
 	} catch (AMQPException e) {
 		std::cout << e.getMessage() << std::endl;

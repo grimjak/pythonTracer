@@ -1,0 +1,7 @@
+static
+frontend
+*.obj
+*.mtl
+grafana.db
+sessions
+.git

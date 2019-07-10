@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 import numpy as np
 import sys
 import matplotlib.pyplot as plt
@@ -343,3 +344,5 @@ if __name__ == '__main__':
     print("started")
     setup_writer()
 >>>>>>> 6d56b8e31cc975bfe21cc0fcd57a09595e374fcd
+=======
+>>>>>>> 9f37655dffb2d9600a6f4ceef79335da0666a3c3

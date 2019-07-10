@@ -11,6 +11,9 @@
         "algorithm": "cpp",
         "bitset": "cpp",
         "chrono": "cpp",
-        "map": "cpp"
+        "map": "cpp",
+        "memory": "cpp",
+        "random": "cpp",
+        "thread": "cpp"
     }
 }
